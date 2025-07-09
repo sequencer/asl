@@ -63,12 +63,20 @@
             programs = {
               nixfmt.enable = true;
               scalafmt.enable = true;
+              clang-format.enable = true;
             };
             settings.formatter = {
               nixfmt.excludes = [
                 "*/generated.nix"
               ];
               scalafmt.includes = [
+              ];
+              clang-format.includes = [
+                "mlir/**/*.cpp"
+                "mlir/**/*.h"
+                "mlir/**/*.hpp"
+                "mlir/**/*.c"
+                "mlir/**/*.cc"
               ];
             };
           };
