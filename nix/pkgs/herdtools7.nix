@@ -15,16 +15,19 @@ ocamlPackages.buildDunePackage {
     hash = "sha256-Y2G6dPVnrVX1FewFZfcMCDsLqE7/N0qZxTuoNupz3rU=";
   };
 
-  nativeBuildInputs = with ocamlPackages; [
-    ocaml
-    dune_3
-    menhir
-    zarith
-    menhirLib
-  ] ++ [
-    texliveFull
-    python3
-  ];
+  nativeBuildInputs =
+    with ocamlPackages;
+    [
+      ocaml
+      dune_3
+      menhir
+      zarith
+      menhirLib
+    ]
+    ++ [
+      texliveFull
+      python3
+    ];
 
   buildInputs = with ocamlPackages; [
     findlib
