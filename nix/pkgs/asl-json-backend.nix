@@ -1,7 +1,7 @@
 {
   fetchFromGitHub,
   ocamlPackages,
-  herdtools7
+  herdtools7,
 }:
 
 ocamlPackages.buildDunePackage {

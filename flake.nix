@@ -53,7 +53,21 @@
               buildInputs = with pkgs; [
                 herdtools7
                 typst
+                asl-mlir
+                ocaml
+                cmake
+                ninja
               ];
+              shellHook = ''
+                echo "Building MLIR project in mlir/build"
+                mkdir -p mlir/build
+                (cd mlir/build && cmake -G Ninja .. && ninja)
+
+                echo "Copying herdtools7 package to reference/herdtools7"
+                mkdir -p reference/herdtools7
+                cp -rL --no-preserve=ownership ${pkgs.herdtools7}/* reference/herdtools7/
+                export OCAMLPATH=${pkgs.herdtools7}/lib/:$OCAMLPATH
+              '';
             };
           };
 
