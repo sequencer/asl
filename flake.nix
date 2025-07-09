@@ -52,6 +52,7 @@
             default = pkgs.mkShell {
               buildInputs = with pkgs; [
                 herdtools7
+                typst
               ];
             };
           };
