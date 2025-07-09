@@ -1,0 +1,17 @@
+(lang dune 3.18)
+
+(name asl-json-backend)
+
+(authors "Jiuyang Liu <liu@Jiuyang.me>")
+
+(maintainers "Jiuyang Liu <liu@Jiuyang.me>")
+
+(license Apache-2.0)
+
+(package
+ (name asl-json-backend)
+ (synopsis "Convert ASL AST to JSON")
+ (description "Convert ASL AST to JSON")
+ (depends ocaml asllib)
+)
+
