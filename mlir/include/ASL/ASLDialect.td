@@ -1,4 +1,4 @@
-//===- ASLDialect.td - ASL dialect -------------------------*- tablegen -*-===//
+//===- ASLDialect.td - ASL dialect definition -----------*- tablegen -*-===//
 //
 // This file is licensed under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -11,24 +11,20 @@
 
 include "mlir/IR/OpBase.td"
 
-//===----------------------------------------------------------------------===//
-// ASL dialect definition.
-//===----------------------------------------------------------------------===//
-
 def ASL_Dialect : Dialect {
-    let name = "asl";
-    let summary = "A asl out-of-tree MLIR dialect.";
-    let description = [{
-        This dialect is one-to-one map to Arm Specification Language.
-    }];
-    let cppNamespace = "::mlir::asl";
+  let name = "asl";
+  let summary = "ASL (Architecture Specification Language) dialect";
+  let description = [{
+    The ASL dialect provides operations and types for representing
+    Architecture Specification Language constructs in MLIR.
+  }];
+  let cppNamespace = "::mlir::asl";
+  
+  let useDefaultTypePrinterParser = 1;
+  let useDefaultAttributePrinterParser = 1;
 }
 
-//===----------------------------------------------------------------------===//
-// Base asl operation definition.
-//===----------------------------------------------------------------------===//
-
 class ASL_Op<string mnemonic, list<Trait> traits = []> :
-        Op<ASL_Dialect, mnemonic, traits>;
+    Op<ASL_Dialect, mnemonic, traits>;
 
 #endif // ASL_DIALECT

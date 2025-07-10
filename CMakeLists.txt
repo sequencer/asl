@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
-project(asl-mlir)
+project(ASL)
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Find MLIR
 find_package(MLIR REQUIRED CONFIG)
 
 message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
@@ -20,11 +24,10 @@ include(HandleLLVMOptions)
 
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${MLIR_INCLUDE_DIRS})
-include_directories(${PROJECT_SOURCE_DIR}/include)
-include_directories(${PROJECT_BINARY_DIR}/include)
-link_directories(${LLVM_BUILD_LIBRARY_DIR})
-add_definitions(${LLVM_DEFINITIONS})
+include_directories(${PROJECT_SOURCE_DIR}/mlir/include)
+include_directories(${PROJECT_BINARY_DIR}/mlir/include)
+separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
+add_definitions(${LLVM_DEFINITIONS_LIST})
 
-add_subdirectory(include/ASL)
-add_subdirectory(lib/ASL)
-add_subdirectory(asl-opt)
+# Add the mlir subdirectory
+add_subdirectory(mlir)

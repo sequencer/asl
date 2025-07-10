@@ -1,4 +1,4 @@
-//===- ASLTypes.td - ASL dialect types --------------------*- tablegen -*-===//
+//===- ASLTypes.td - ASL dialect types -------------------------*- tablegen -*-===//
 //
 // This file is licensed under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -9,292 +9,167 @@
 #ifndef ASL_TYPES
 #define ASL_TYPES
 
+include "ASLDialect.td"
 include "mlir/IR/AttrTypeBase.td"
-include "mlir/IR/BuiltinAttributeInterfaces.td"
-include "ASL/ASLDialect.td"
 
 //===----------------------------------------------------------------------===//
 // ASL Type Definitions
 //===----------------------------------------------------------------------===//
 
-// Base class for all ASL types
-class ASL_Type<string name, string typeMnemonic, list<Trait> traits = []>
+class ASL_Type<string name, list<Trait> traits = []>
     : TypeDef<ASL_Dialect, name, traits> {
-  let mnemonic = typeMnemonic;
 }
 
-//===----------------------------------------------------------------------===//
-// Primitive Types
-//===----------------------------------------------------------------------===//
-
-// Integer type with optional constraints
-def ASL_IntType : ASL_Type<"Int", "int"> {
-  let summary = "ASL integer type with optional constraints";
+def ASL_IntType : ASL_Type<"Int"> {
+  let summary = "ASL integer type";
   let description = [{
-    Represents an ASL integer type that can be:
-    - Unconstrained: !asl.int
-    - Pending constraint: !asl.int<pending>
-    - Parameterized: !asl.int<param, "param_name">
-    - Constrained: !asl.int<constraints[exact(42)]>
-    - Range constrained: !asl.int<constraints[range(0, 255)]>
+    The ASL integer type represents arbitrary precision integers.
+    It can optionally include constraints to restrict the value range.
+  }];
+  // TODO: add constraint support.
+  let typeName = "asl.int";
+}
+
+def ASL_BitsType : ASL_Type<"Bits"> {
+  let summary = "ASL bitvector type";
+  let description = [{
+    The ASL bits type represents fixed-width bitvectors.
+    The width can be a constant integer or an expression.
+    Optionally includes bitfield definitions.
   }];
   
-  let parameters = (ins
-    OptionalParameter<"StringAttr">:$constraintKind,
-    OptionalParameter<"ArrayAttr">:$constraints,
-    OptionalParameter<"StringAttr">:$parameterName
+  // TODO: add bitfields support.
+  let parameters = (ins 
+    "IntegerAttr":$width
   );
-  
-  // Use custom assembly format (to be implemented in C++)
-  let hasCustomAssemblyFormat = 1;
-  
-  let builders = [
-    TypeBuilder<(ins), [{
-      return $_get($_ctxt, nullptr, nullptr, nullptr);
-    }]>,
-    TypeBuilder<(ins "StringRef":$paramName), [{
-      auto paramAttr = StringAttr::get($_ctxt, paramName);
-      return $_get($_ctxt, nullptr, nullptr, paramAttr);
-    }]>
-  ];
+  let typeName = "asl.bits";
 }
 
-// Real number type
-def ASL_RealType : ASL_Type<"Real", "real"> {
+def ASL_RealType : ASL_Type<"Real"> {
   let summary = "ASL real number type";
-  let description = "Represents arbitrary-precision rational numbers in ASL";
-  let hasCustomAssemblyFormat = 1;
-}
-
-// String type
-def ASL_StringType : ASL_Type<"String", "string"> {
-  let summary = "ASL string type";
-  let description = "Represents string values in ASL";
-  let hasCustomAssemblyFormat = 1;
-}
-
-// Boolean type
-def ASL_BoolType : ASL_Type<"Bool", "bool"> {
-  let summary = "ASL boolean type";
-  let description = "Represents boolean values (true/false) in ASL";
-  let hasCustomAssemblyFormat = 1;
-}
-
-// Bitvector type with optional bitfields
-def ASL_BitsType : ASL_Type<"Bits", "bits"> {
-  let summary = "ASL bitvector type with optional bitfields";
   let description = [{
-    Represents a bitvector type with configurable width and optional bitfield definitions:
-    - Simple: !asl.bits<32>
-    - With expression width: !asl.bits<width_expr>
-    - With bitfields: !asl.bits<8, [simple("flag", [0:0])]>
+    The ASL real type represents exact rational numbers.
+    It can optionally include constraints to restrict the value range.
   }];
-  
-  let parameters = (ins
-    "Attribute":$widthExpr,
-    OptionalParameter<"ArrayAttr">:$bitfields
-  );
-  
-  let assemblyFormat = [{
-    `<` $widthExpr (`,` `[` $bitfields^ `]`)? `>`
-  }];
-  
-  let builders = [
-    TypeBuilder<(ins "Attribute":$width), [{
-      return $_get($_ctxt, width, nullptr);
-    }]>
-  ];
+  let typeName = "asl.real";
 }
 
-//===----------------------------------------------------------------------===//
-// Composite Types
-//===----------------------------------------------------------------------===//
+def ASL_StringType : ASL_Type<"String"> {
+  let summary = "ASL string type";
+  let description = [{
+    The ASL string type represents character strings.
+  }];
+  let typeName = "asl.string";
+}
 
-// Enumeration type
-def ASL_EnumType : ASL_Type<"Enum", "enum"> {
+def ASL_BoolType : ASL_Type<"Bool"> {
+  let summary = "ASL boolean type";
+  let description = [{
+    The ASL boolean type represents logical true/false values.
+  }];
+  let typeName = "asl.bool";
+}
+
+def ASL_EnumType : ASL_Type<"Enum"> {
   let summary = "ASL enumeration type";
   let description = [{
-    Represents an enumeration type with a list of string labels:
-    - !asl.enum<["RED", "GREEN", "BLUE"]>
+    The ASL enumeration type represents a finite set of named values.
   }];
   
   let parameters = (ins "ArrayAttr":$labels);
-  let assemblyFormat = "`<` `[` $labels `]` `>`";
-  
-  let builders = [
-    TypeBuilder<(ins "ArrayRef<StringRef>":$labelNames), [{
-      SmallVector<Attribute> attrs;
-      for (auto name : labelNames) {
-        attrs.push_back(StringAttr::get($_ctxt, name));
-      }
-      return $_get($_ctxt, ArrayAttr::get($_ctxt, attrs));
-    }]>
-  ];
+  let typeName = "asl.enum";
 }
 
-// Tuple type
-def ASL_TupleType : ASL_Type<"Tuple", "tuple"> {
+def ASL_TupleType : ASL_Type<"Tuple"> {
   let summary = "ASL tuple type";
   let description = [{
-    Represents a tuple type with ordered elements:
-    - Empty: !asl.tuple<>
-    - Single: !asl.tuple<!asl.int>
-    - Multiple: !asl.tuple<!asl.int, !asl.bool, !asl.real>
+    The ASL tuple type represents ordered collections of heterogeneous elements.
   }];
   
-  let parameters = (ins OptionalParameter<"ArrayRef<Type>">:$elements);
-  let assemblyFormat = "`<` ($elements^)? `>`";
-  
-  let builders = [
-    TypeBuilder<(ins), [{
-      return $_get($_ctxt, ArrayRef<Type>{});
-    }]>
-  ];
+  let parameters = (ins "ArrayAttr":$elementTypes);
+  let typeName = "asl.tuple";
 }
 
-// Array type  
-def ASL_ArrayType : ASL_Type<"Array", "array"> {
+def ASL_ArrayType : ASL_Type<"Array"> {
   let summary = "ASL array type";
   let description = [{
-    Represents an array type with element type and index specification:
-    - Length-based: !asl.array<!asl.int, length(10)>
-    - Expression-based: !asl.array<!asl.int, length(expr)>
-    - Enum-indexed: !asl.array<!asl.real, enum("Color", ["RED", "GREEN", "BLUE"])>
+    The ASL array type represents arrays with element type and index specification.
+    Arrays can be indexed by integers or enumeration values.
   }];
   
-  let parameters = (ins
-    "Type":$elementType,
-    "Attribute":$indexType
-  );
-  
-  let assemblyFormat = "`<` $elementType `,` $indexType `>`";
+  let parameters = (ins "Attribute":$indexType, "Type":$elementType);
+  let typeName = "asl.array";
 }
 
-// Record type
-def ASL_RecordType : ASL_Type<"Record", "record"> {
+def ASL_RecordType : ASL_Type<"Record"> {
   let summary = "ASL record type";
   let description = [{
-    Represents a record type with named fields:
-    - !asl.record<"Point", [("x", !asl.real), ("y", !asl.real)]>
+    The ASL record type represents structured data with named fields.
   }];
   
-  let parameters = (ins
-    "StringAttr":$name,
-    "ArrayAttr":$fields
+  let parameters = (ins 
+    ArrayRefParameter<"Attribute", "field names and types">:$fields
   );
-  
-  let assemblyFormat = "`<` $name `,` `[` $fields `]` `>`";
-  
-  let builders = [
-    TypeBuilder<(ins "StringRef":$name, "ArrayRef<Attribute>":$fieldAttrs), [{
-      auto nameAttr = StringAttr::get($_ctxt, name);
-      return $_get($_ctxt, nameAttr, ArrayAttr::get($_ctxt, fieldAttrs));
-    }]>
-  ];
+  let typeName = "asl.record";
 }
 
-// Exception type
-def ASL_ExceptionType : ASL_Type<"Exception", "exception"> {
+
+def ASL_ExceptionType : ASL_Type<"Exception"> {
   let summary = "ASL exception type";
   let description = [{
-    Represents an exception type with named fields:
-    - !asl.exception<"Error", [("code", !asl.int), ("msg", !asl.string)]>
+    The ASL exception type represents exception values with named fields.
   }];
   
-  let parameters = (ins
-    "StringAttr":$name,
-    "ArrayAttr":$fields
+  let parameters = (ins 
+    ArrayRefParameter<"Attribute", "field names and types">:$fields
   );
-  
-  let assemblyFormat = "`<` $name `,` `[` $fields `]` `>`";
-  
-  let builders = [
-    TypeBuilder<(ins "StringRef":$name, "ArrayRef<Attribute>":$fieldAttrs), [{
-      auto nameAttr = StringAttr::get($_ctxt, name);
-      return $_get($_ctxt, nameAttr, ArrayAttr::get($_ctxt, fieldAttrs));
-    }]>
-  ];
+  let typeName = "asl.exception";
 }
 
-// Collection type
-def ASL_CollectionType : ASL_Type<"Collection", "collection"> {
+def ASL_CollectionType : ASL_Type<"Collection"> {
   let summary = "ASL collection type";
   let description = [{
-    Represents a collection type with named fields:
-    - !asl.collection<[("field1", !asl.int), ("field2", !asl.string)]>
+    The ASL collection type represents collections with named fields,
+    similar to records but with different semantics.
   }];
   
-  let parameters = (ins "ArrayAttr":$fields);
-  let assemblyFormat = "`<` `[` $fields `]` `>`";
-  
-  let builders = [
-    TypeBuilder<(ins "ArrayRef<Attribute>":$fieldAttrs), [{
-      return $_get($_ctxt, ArrayAttr::get($_ctxt, fieldAttrs));
-    }]>
-  ];
+  let parameters = (ins 
+    ArrayRefParameter<"Attribute", "field names and types">:$fields
+  );
+  let typeName = "asl.collection";
 }
 
-// Named type (type alias)
-def ASL_NamedType : ASL_Type<"Named", "named"> {
-  let summary = "ASL named type reference";
+def ASL_NamedType : ASL_Type<"Named"> {
+  let summary = "ASL named type";
   let description = [{
-    Represents a reference to a named type declaration:
-    - !asl.named<@MyType>
-    - !asl.named<@nested.scope.Type>
+    The ASL named type represents type variables and named type references.
+    Used for parameterized types and type aliases.
   }];
   
-  let parameters = (ins "FlatSymbolRefAttr":$name);
-  let assemblyFormat = "`<` $name `>`";
+  let parameters = (ins "StringAttr":$name);
+  let typeName = "asl.named";
 }
 
-// L-expression type (for assignment targets)
-def ASL_LExprType : ASL_Type<"LExpr", "lexpr"> {
+def ASL_LExprType : ASL_Type<"LExpr"> {
   let summary = "ASL l-expression type";
   let description = [{
-    Represents the type of left-hand side expressions used in assignments.
-    This is an internal type used by the dialect.
+    The ASL l-expression type represents assignable expressions (lvalues).
   }];
-  let hasCustomAssemblyFormat = 1;
+  
+  let parameters = (ins "Type":$valueType);
+  let typeName = "asl.lexpr";
 }
 
-//===----------------------------------------------------------------------===//
-// Type Predicates and Constraints
-//===----------------------------------------------------------------------===//
+// Composite type constraints
+def ASLNumericType : AnyTypeOf<[ASL_IntType, ASL_RealType]>;
+def ASLIndexableType : AnyTypeOf<[ASL_BitsType, ASL_ArrayType, ASL_StringType]>;
+def ASLStructuralType : AnyTypeOf<[ASL_RecordType, ASL_TupleType, ASL_CollectionType]>;
 
-// Predicate for any ASL type
-def IsASLType : Type<CPred<"$_self.isa<::mlir::asl::ASLType>()">, 
-                     "ASL type">;
-
-// Predicate for ASL integer types
-def IsASLIntType : Type<CPred<"$_self.isa<::mlir::asl::IntType>()">,
-                        "ASL integer type">;
-
-// Predicate for ASL bits types  
-def IsASLBitsType : Type<CPred<"$_self.isa<::mlir::asl::BitsType>()">,
-                         "ASL bits type">;
-
-// Predicate for ASL numeric types (int, real)
-def IsASLNumericType : Type<Or<[IsASLIntType.predicate,
-                                CPred<"$_self.isa<::mlir::asl::RealType>()">]>,
-                            "ASL numeric type">;
-
-// Predicate for ASL composite types
-def IsASLCompositeType : Type<Or<[
-  CPred<"$_self.isa<::mlir::asl::TupleType>()">,
-  CPred<"$_self.isa<::mlir::asl::ArrayType>()">,
-  CPred<"$_self.isa<::mlir::asl::RecordType>()">,
-  CPred<"$_self.isa<::mlir::asl::ExceptionType>()">,
-  CPred<"$_self.isa<::mlir::asl::CollectionType>()">
-]>, "ASL composite type">;
-
-//===----------------------------------------------------------------------===//
-// Type Aliases for Common Usage
-//===----------------------------------------------------------------------===//
-
-// Constraint for operands that must be ASL types
-def ASLType : Type<IsASLType.predicate, "any ASL type">;
-def ASLIntType : Type<IsASLIntType.predicate, "ASL integer type">;
-def ASLBitsType : Type<IsASLBitsType.predicate, "ASL bits type">;
-def ASLNumericType : Type<IsASLNumericType.predicate, "ASL numeric type">;
+// General ASL type constraint
+def ASLType : AnyTypeOf<[
+  ASL_IntType, ASL_RealType, ASL_BoolType, ASL_BitsType, ASL_StringType,
+  ASL_ArrayType, ASL_TupleType, ASL_RecordType, ASL_CollectionType, ASL_EnumType, 
+  ASL_ExceptionType, ASL_NamedType, ASL_LExprType
+]>;
 
 #endif // ASL_TYPES
