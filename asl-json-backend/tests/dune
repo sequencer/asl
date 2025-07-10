@@ -1,0 +1,17 @@
+(rule
+ (target lit.site.cfg.py)
+ (deps
+  lit.site.cfg.py.in
+  ../src/JsonBackend.exe)
+ (action
+  (with-stdout-to %{target}
+   (run sed -e "s|@ASL_JSON_BACKEND@|%{exe:../src/JsonBackend.exe}|g" -e "s|@LIT_DIR@|%{project_root}/tests|g" lit.site.cfg.py.in))))
+
+(rule
+ (alias lit)
+ (deps lit.site.cfg.py
+       lit.cfg.py
+       ASLJsonBackendTest.py
+       (glob_files_rec *.asl))
+ (action
+  (run lit -v .)))

@@ -1,0 +1,5 @@
+import sys
+config.lit_dir = "@LIT_DIR@".split(",")
+config.asl_json_backend = "@ASL_JSON_BACKEND@"
+config.test_exec_root = os.path.dirname(__file__)
+lit_config.load_config(config, "@LIT_DIR@/lit.cfg.py")

@@ -1,7 +1,8 @@
 {
   fetchFromGitHub,
   ocamlPackages,
-  herdtools7
+  herdtools7,
+  lit
 }:
 
 ocamlPackages.buildDunePackage {
@@ -15,6 +16,7 @@ ocamlPackages.buildDunePackage {
     yojson
     zarith
     menhirLib
+    lit
   ];
 
   buildInputs = with ocamlPackages; [
@@ -39,6 +41,13 @@ ocamlPackages.buildDunePackage {
     dune build --profile release --cache disabled @install
 
     runHook postBuild
+  '';
+
+  doCheck = false;
+  checkPhase = ''
+    runHook preCheck
+    dune build @lit
+    runHook postCheck
   '';
 
   installPhase = ''
