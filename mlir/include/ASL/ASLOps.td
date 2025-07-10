@@ -10,6 +10,7 @@
 #define ASL_OPS
 
 include "ASLDialect.td"
+include "ASLTypes.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
