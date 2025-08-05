@@ -8,4 +8,6 @@ rec {
   asl-llvm = circt-llvm.dev;
 
   asl-json-backend = final.callPackage ./pkgs/asl-json-backend.nix { };
+
+  asl-mlir = final.callPackage ./pkgs/asl-mlir.nix { };
 }

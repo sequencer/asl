@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "*.inc": "cpp",
+        "initializer_list": "cpp",
+        "text_encoding": "cpp",
+        "typeinfo": "cpp",
+        "deque": "cpp",
+        "string": "cpp",
+        "vector": "cpp"
+    }
+}
