@@ -16,8 +16,14 @@ This command ensures all necessary dependencies are available. Some dependencies
 
 `herdtools7` is the official frontend for the Arm Architectural Specification Language (ASL) and serves as the source of truth for the language specification. It is responsible for parsing and type-checking ASL code. After successful validation, the resulting Abstract Syntax Tree (AST) is consumed by the ASL JSON Backend.
 
+To build the Herdtools7, run:
+```sh
+nix build .#herdtools7 --out-link herdtools7
+```
+
 The `herdtools7` suite is utilized as a library within this project. The ASL Language Reference Manual (LRM), provided by this dependency, can be found at:
-`reference/herdtools7/share/doc/ASLReference.pdf`
+`asl-json-backend-out/share/doc/ASLReference.pdf`
+`./herdtools7-out/bin/aslref`
 
 == ASL JSON Backend
 
@@ -27,7 +33,7 @@ This is a minimal tool for serializing the ASL AST, including type information, 
 
 To build the ASL JSON Backend, run:
 ```sh
-nix build .#asl-json-backend
+nix build .#asl-json-backend --out-link asl-json-backend-out
 ```
 
 === Development
@@ -49,7 +55,7 @@ To reduce build times and ensure compatibility, the ASL MLIR dependency is align
 
 To build ASL MLIR, run:
 ```sh
-nix build .#asl-mlir
+nix build .#asl-mlir --out-link asl-mlir
 ```
 
 === Development
@@ -59,4 +65,14 @@ For development, use the following commands to set up the build environment:
 nix develop .#asl-mlir
 cd mlir
 cmake -G Ninja -B build
+ninja -C build
 ```
+
+= Roadmap
+The project development roadmap is:
+- Setup Herdtools7(aslib frontend) and dump the json AST;
+- Prototype the MLIR Dialect;
+- Parse all tests and convert them into MLIR;
+- Add pass to lower the MLIR pass into EmitC Dialect;
+- Compile T1 pokedex into native C for execution;
+- Migrate more upstream tests into project and start to bump with the herdtools7 CI/CD; 
