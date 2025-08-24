@@ -1,0 +1,26 @@
+// RUN: asl-json-backend %s > %t.json
+// RUN: asl-opt --json-input %t.json | FileCheck %s
+
+// CHECK: "builtin.module"() ({
+
+type a of array [[4]] of integer;
+
+var global_a: a;
+
+readonly func get_2(local_a: a) => integer
+begin
+  return local_a[[2]];
+end;
+
+func main () => integer
+begin
+  global_a [[1]] = 3;
+  assert global_a[[1]] == 3;
+
+  var local_a: a;
+  local_a[[2]] = 5;
+  assert get_2(local_a) == 5;
+
+  return 0;
+end;
+
