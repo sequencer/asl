@@ -22,6 +22,15 @@
 #include "mlir/IR/Types.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
+namespace mlir {
+class RewritePatternSet;
+
+namespace asl {
+/// Populate canonicalization patterns for ASL dialect operations.
+void populateASLCanonicalizationPatterns(RewritePatternSet &patterns);
+} // namespace asl
+} // namespace mlir
+
 #define GET_OP_CLASSES
 #include "ASL/ASLOps.h.inc"
 

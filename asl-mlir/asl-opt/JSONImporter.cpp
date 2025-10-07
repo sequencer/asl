@@ -525,9 +525,9 @@ struct JSONImporter {
         if (!lt || *lt != "L_Int")
           return std::nullopt;
         if (auto valStr = litObj->getString("value")) {
-          llvm::APInt ap;
-          if (!valStr->getAsInteger(10, ap))
-            return ap.getSExtValue();
+          int64_t result;
+          if (!valStr->getAsInteger(10, result))
+            return result;
         }
         return std::nullopt;
       };
@@ -637,9 +637,9 @@ struct JSONImporter {
                   if (auto litType = litObj->getString("type");
                       litType && *litType == "L_Int") {
                     if (auto val = litObj->getString("value")) {
-                      llvm::APInt ap;
-                      if (!val->getAsInteger(10, ap))
-                        width = ap.getSExtValue();
+                      uint64_t unsignedWidth;
+                      if (!val->getAsInteger(10, unsignedWidth))
+                        width = static_cast<int64_t>(unsignedWidth);
                     }
                   }
                 }
@@ -684,9 +684,9 @@ struct JSONImporter {
                       if (auto ltype = litObj->getString("type");
                           ltype && *ltype == "L_Int") {
                         if (auto sval = litObj->getString("value")) {
-                          llvm::APInt ap;
-                          if (!sval->getAsInteger(10, ap))
-                            length = ap.getSExtValue();
+                          uint64_t unsignedLength;
+                          if (!sval->getAsInteger(10, unsignedLength))
+                            length = static_cast<int64_t>(unsignedLength);
                         }
                       }
                     }

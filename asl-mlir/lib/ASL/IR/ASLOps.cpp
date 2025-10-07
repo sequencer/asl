@@ -48,3 +48,9 @@ LogicalResult GlobalStorageDeclOp::verify() {
   // TODO: Add verification logic for global storage declarations
   return success();
 }
+
+LogicalResult ConstantInitGlobalStorageDeclOp::verify() {
+  // TODO: Add verification logic for constant init global storage declarations
+  // Could verify that the constant value string is well-formed
+  return success();
+}

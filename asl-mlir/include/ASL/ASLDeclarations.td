@@ -102,6 +102,33 @@ def ASL_GlobalStorageDeclOp : ASL_DeclOp<"global"> {
   }];
 }
 
+def ASL_ConstantInitGlobalStorageDeclOp : ASL_DeclOp<"global.const_init"> {
+  let summary = "Global variable declaration with constant initializer";
+  let description = [{
+    Represents a global variable declaration with a constant initializer.
+    This is a canonicalized form of GlobalStorageDeclOp where the initial
+    value is a compile-time constant literal that has been folded into an
+    attribute.
+    
+    This operation declares a global variable with:
+    - Declaration keyword (constant, config, let, var, parameter)
+    - Variable name and type
+    - Initial constant value stored as a string attribute
+  }];
+
+  let arguments = (ins ASL_GDKAttr:$keyword, StrAttr:$name, TypeAttr:$type,
+      StrAttr:$initial_value);
+
+  let assemblyFormat = [{
+    $keyword $name `:` $type `=` $initial_value attr-dict
+  }];
+
+  let extraClassDeclaration = [{
+    /// Verify the constant init global storage declaration
+    ::mlir::LogicalResult verify();
+  }];
+}
+
 def ASL_TypeDeclOp : ASL_DeclOp<"type_decl"> {
   let summary = "Type declaration";
   let description = [{

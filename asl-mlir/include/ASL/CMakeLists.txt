@@ -12,3 +12,11 @@ mlir_tablegen(ASLDialect.h.inc -gen-dialect-decls -dialect=asl)
 mlir_tablegen(ASLDialect.cpp.inc -gen-dialect-defs -dialect=asl)
 
 add_public_tablegen_target(ASLIncGen)
+
+set(LLVM_TARGET_DEFINITIONS ASLPasses.td)
+
+mlir_tablegen(ASLPasses.h.inc -gen-pass-decls -name ASL)
+mlir_tablegen(ASLPasses.capi.h.inc -gen-pass-capi-header --prefix ASL)
+mlir_tablegen(ASLPasses.capi.cpp.inc -gen-pass-capi-impl --prefix ASL)
+
+add_public_tablegen_target(ASLPassIncGen)

@@ -35,7 +35,7 @@ void ASLDialect::initialize() {
 
 void ASLDialect::getCanonicalizationPatterns(
     RewritePatternSet &patterns) const {
-  // TODO: Add canonicalization patterns when needed
+  populateASLCanonicalizationPatterns(patterns);
 }
 
 Operation *ASLDialect::materializeConstant(OpBuilder &builder, Attribute value,

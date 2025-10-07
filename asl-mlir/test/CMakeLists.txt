@@ -18,4 +18,4 @@ add_lit_testsuite(check-asl-opt "Running the asl-opt regression tests"
         )
 set_target_properties(check-asl-opt PROPERTIES FOLDER "Tests")
 
-add_lit_testsuites(ASL_OPT ${CMAKE_CURRENT_SOURCE_DIR} DEPENDS ${ASL_OPT_TEST_DEPENDS})
+add_lit_testsuites(ASL_OPT ${CMAKE_CURRENT_BINARY_DIR} DEPENDS ${ASL_OPT_TEST_DEPENDS})
