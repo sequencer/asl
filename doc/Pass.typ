@@ -1,0 +1,1397 @@
+#let document_title = "Lowering ASL to EmitC"
+#set document(title: document_title, author: "Jiuyang Liu")
+#set heading(numbering: "1.1")
+
+This document describes the lowering process from the ASL MLIR Dialect to the EmitC Dialect. The EmitC dialect provides a way to emit C/C++ code from MLIR operations, enabling the generation of efficient C implementations from ASL specifications. This pass performs type conversion, operation lowering, and ensures semantic preservation while translating ASL operations to their C equivalents.
+
+= Overview <overview>
+
+The ASL to EmitC lowering pass transforms high-level ASL operations into EmitC operations that can be directly emitted as C code. The lowering process consists of several key phases:
+
+1. *Type Conversion*: ASL types are converted to C-compatible types through EmitC
+2. *Operation Lowering*: ASL operations are replaced with equivalent EmitC operations
+3. *Control Flow Conversion*: ASL control flow constructs are mapped to C control flow
+4. *Memory Management*: ASL's value semantics are preserved in C's pointer-based model
+
+= Type Lowering <type_lowering>
+
+== Integer Types <int_type_lowering>
+
+ASL integer types (`!asl.int`) are lowered based on their constraint kind:
+
+#table(
+  columns: 3,
+  [ASL Type], [C Type], [Notes],
+  [`!asl.int<unconstrained>`], [`intmax_t`], [Uses largest available integer type],
+  [`!asl.int<constrained<exact>>`], [`const intmax_t`], [Compile-time constant when possible],
+  [`!asl.int<constrained<range>>`], [`intmax_t`], [Sized based on range, optional checker on write],
+)
+Constants are emitted using `emitc.constant` operations.
+
+*TODO:* Ideally, int should be lowered with GMP calls since they are not proved to be less than `intmax_t`. Here are two choices:
+- Adding range constraints indicate compiler that integer is small can can safefuly expressed with `intmax_t`, otherwise using GMP for possibility of large number.
+- Adding globally lowering pass to lower all integer to gmp for correctness.
+
+== Bitvector Types <bits_type_lowering>
+
+ASL bitvector types (`!asl.bits<width, bitfields>`) are lowered to C types based on width:
+
+#table(
+  columns: 3,
+  [Width Range], [C Type], [Implementation],
+  [1-8 bits], [`uint8_t`], [Direct integer representation],
+  [9-16 bits], [`uint16_t`], [Direct integer representation],
+  [17-32 bits], [`uint32_t`], [Direct integer representation],
+  [33-64 bits], [`uint64_t`], [Direct integer representation],
+  [65+ bits], [`struct { uint64_t words[N]; }`], [Array-based representation],
+)
+
+=== Bitfield Lowering <bitfield_lowering>
+
+ASL bitvectors support bitfield annotations that define named regions within the bitvector. During lowering, bitfields are handled through accessor functions or macros rather than C struct bitfields, as ASL bitfields have different semantics and can be dynamically positioned.
+
+==== Bitfield Types <bitfield_types>
+
+ASL supports three kinds of bitfields (see `BitFieldAttr` in IR documentation):
+
+1. *Simple Bitfields* (`BitField_Simple`): A named slice of the bitvector
+2. *Nested Bitfields* (`BitField_Nested`): A bitfield containing sub-bitfields
+3. *Typed Bitfields* (`BitField_Type`): A bitfield with an associated ASL type
+
+==== Bitfield Access Patterns <bitfield_access_patterns>
+
+Bitfield access is lowered to bitwise operations:
+
+*Simple bitfield extraction:*
+```c
+// ASL: bits(32) with bitfield [15:8] named 'byte1'
+uint32_t value = 0xDEADBEEF;
+
+// Access bitfield: value.byte1
+// Lowered to:
+uint8_t byte1 = (value >> 8) & 0xFF;
+```
+
+*Nested bitfield extraction:*
+```c
+// ASL: bits(32) with bitfield [31:16] named 'upper'
+//      and nested bitfield [7:4] within 'upper' named 'nibble'
+uint32_t value = 0xDEADBEEF;
+
+// Access nested bitfield: value.upper.nibble
+// Lowered to:
+uint8_t upper_nibble = (value >> 20) & 0xF;  // Offset adjusted for nesting
+```
+
+*Typed bitfield extraction:*
+```c
+// ASL: bits(32) with bitfield [23:16] of type enum{A,B,C}
+uint32_t value = 0xDEADBEEF;
+
+// Access typed bitfield with type annotation
+// Lowered to:
+enum my_enum { A, B, C };
+enum my_enum field = (enum my_enum)((value >> 16) & 0xFF);
+```
+
+==== Bitfield Assignment <bitfield_assignment>
+
+Bitfield assignment uses read-modify-write sequences:
+
+*Simple bitfield assignment:*
+```c
+// ASL: value.byte1 = 0x42;
+// Lowered to:
+value = (value & ~(0xFF << 8)) | ((uint32_t)0x42 << 8);
+```
+
+*Nested bitfield assignment:*
+```c
+// ASL: value.upper.nibble = 0x5;
+// Lowered to:
+value = (value & ~(0xF << 20)) | ((uint32_t)0x5 << 20);
+```
+
+*Typed bitfield assignment:*
+```c
+// ASL: value.enum_field = A;
+// Lowered to:
+value = (value & ~(0xFF << 16)) | (((uint32_t)A) << 16);
+```
+
+==== Helper Functions for Bitfields <bitfield_helpers>
+
+For complex bitfield operations, helper functions are generated:
+
+```c
+// Extract bitfield from bitvector
+static inline uint64_t bitvec_extract_field(uint64_t value, int start, int width) {
+  return (value >> start) & ((1ULL << width) - 1);
+}
+
+// Insert bitfield into bitvector
+static inline uint64_t bitvec_insert_field(uint64_t value, uint64_t field, 
+                                           int start, int width) {
+  uint64_t mask = ((1ULL << width) - 1) << start;
+  return (value & ~mask) | ((field << start) & mask);
+}
+
+// For large bitvectors (>64 bits)
+typedef struct {
+  uint64_t words[N];
+} bitvec_large_t;
+
+static inline void bitvec_large_extract_field(uint64_t *result, 
+                                               const bitvec_large_t *value,
+                                               int start, int width) {
+  // Implementation for multi-word extraction
+  // ...
+}
+
+static inline void bitvec_large_insert_field(bitvec_large_t *value,
+                                              const uint64_t *field,
+                                              int start, int width) {
+  // Implementation for multi-word insertion
+  // ...
+}
+```
+
+==== Bitfield Slice Operations <bitfield_slices>
+
+Bitfield slices are lowered based on slice kind (see `SliceAttr` in IR):
+
+*Single slice* (`Slice_Single`):
+```c
+// ASL: value[i] where i is a bitfield
+// Lowered to:
+uint8_t bit = (value >> i) & 1;
+```
+
+*Range slice* (`Slice_Range`):
+```c
+// ASL: value[j:i] where j, i are bitfield boundaries
+// Lowered to:
+uint32_t slice = (value >> i) & ((1 << (j - i + 1)) - 1);
+```
+
+*Length slice* (`Slice_Length`):
+```c
+// ASL: value[i +: n] where i is start, n is length
+// Lowered to:
+uint32_t slice = (value >> i) & ((1 << n) - 1);
+```
+
+*Star slice* (`Slice_Star`):
+```c
+// ASL: value[factor * length +: length]
+// Lowered to:
+int start = factor * length;
+uint32_t slice = (value >> start) & ((1 << length) - 1);
+```
+
+==== Large Bitvector Bitfields <large_bitvector_bitfields>
+
+For bitvectors larger than 64 bits, bitfields span multiple words:
+
+```c
+// Bitvector structure
+typedef struct {
+  uint64_t words[4];  // For 256-bit bitvector
+} bitvec256_t;
+
+// Extract bitfield that may span word boundaries
+static inline void bitvec256_extract_field(uint64_t *result,
+                                           const bitvec256_t *value,
+                                           int start, int width) {
+  int start_word = start / 64;
+  int start_bit = start % 64;
+  int end_word = (start + width - 1) / 64;
+  
+  if (start_word == end_word) {
+    // Field within single word
+    *result = (value->words[start_word] >> start_bit) & ((1ULL << width) - 1);
+  } else {
+    // Field spans multiple words
+    int bits_in_first = 64 - start_bit;
+    uint64_t low_bits = value->words[start_word] >> start_bit;
+    uint64_t high_bits = value->words[end_word] & ((1ULL << (width - bits_in_first)) - 1);
+    *result = low_bits | (high_bits << bits_in_first);
+  }
+}
+
+// Insert bitfield that may span word boundaries
+static inline void bitvec256_insert_field(bitvec256_t *value,
+                                          uint64_t field,
+                                          int start, int width) {
+  int start_word = start / 64;
+  int start_bit = start % 64;
+  int end_word = (start + width - 1) / 64;
+  
+  if (start_word == end_word) {
+    // Field within single word
+    uint64_t mask = ((1ULL << width) - 1) << start_bit;
+    value->words[start_word] = (value->words[start_word] & ~mask) | 
+                                ((field << start_bit) & mask);
+  } else {
+    // Field spans multiple words
+    int bits_in_first = 64 - start_bit;
+    uint64_t mask_low = ((1ULL << bits_in_first) - 1) << start_bit;
+    uint64_t mask_high = (1ULL << (width - bits_in_first)) - 1;
+    
+    value->words[start_word] = (value->words[start_word] & ~mask_low) |
+                                ((field << start_bit) & mask_low);
+    value->words[end_word] = (value->words[end_word] & ~mask_high) |
+                              ((field >> bits_in_first) & mask_high);
+  }
+}
+```
+
+==== Bitfield Type Conversion <bitfield_type_conversion>
+
+Typed bitfields require type conversion during access:
+
+```c
+// ASL enumeration for bitfield type
+enum instruction_type {
+  TYPE_ADD = 0,
+  TYPE_SUB = 1,
+  TYPE_MUL = 2,
+  TYPE_DIV = 3
+};
+
+// Extract typed bitfield
+enum instruction_type get_instruction_type(uint32_t instruction) {
+  // Bitfield at [31:29] represents instruction type
+  uint32_t raw_value = (instruction >> 29) & 0x7;
+  return (enum instruction_type)raw_value;
+}
+
+// Insert typed bitfield
+uint32_t set_instruction_type(uint32_t instruction, 
+                               enum instruction_type type) {
+  uint32_t mask = 0x7 << 29;
+  return (instruction & ~mask) | (((uint32_t)type << 29) & mask);
+}
+```
+
+==== Bitfield ATC Operations <bitfield_atc>
+
+The `asl.expr.atc.bits` operation materializes bitfield information during type conversion. This is lowered to inline comments or debug information in the generated C code, as the bitfield structure is captured in the accessor functions:
+
+```c
+// ASL: bits(32) {[31:24] opcode, [23:16] rd, [15:8] rs1, [7:0] rs2}
+// The bitfield structure is documented but doesn't affect the C type
+
+typedef uint32_t instruction_t;  // Base type
+
+// Accessor functions encode bitfield knowledge
+static inline uint8_t instruction_get_opcode(instruction_t insn) {
+  return (insn >> 24) & 0xFF;
+}
+
+static inline uint8_t instruction_get_rd(instruction_t insn) {
+  return (insn >> 16) & 0xFF;
+}
+
+static inline uint8_t instruction_get_rs1(instruction_t insn) {
+  return (insn >> 8) & 0xFF;
+}
+
+static inline uint8_t instruction_get_rs2(instruction_t insn) {
+  return insn & 0xFF;
+}
+
+static inline instruction_t instruction_set_opcode(instruction_t insn, uint8_t opcode) {
+  return (insn & 0x00FFFFFF) | ((uint32_t)opcode << 24);
+}
+
+// ... similar setters for other fields
+```
+
+= Global State Management <global_state_management>
+
+Each MLIR module is lowered to C code with a structured approach to managing global state. This design ensures thread safety, clean initialization, and proper resource management.
+
+== Context Structure Design <context_structure_design>
+
+For each MLIR module (e.g., `foo`), three main components are generated:
+
+1. *Context Structure* (`struct foo_context`): Contains all global state
+2. *Initialization Function* (`void foo_init(foo_context*)`): Initializes all global state
+3. *Cleanup Function* (`void foo_free(foo_context*)`): Frees allocated resources
+
+=== Context Structure <context_structure>
+
+The context structure aggregates all global variables from the ASL module. When lowering global variables, their definitions are added as fields to this structure:
+
+```c
+// For module 'foo' with global variables
+typedef struct foo_context {
+  // Global variables become struct fields
+  uint64_t register_file[32];
+  uint32_t program_counter;
+  uint8_t status_flags;
+  
+  // Exception handling state (if needed)
+  exception_context_t* current_exception_context;
+  
+  // Other module-specific global state
+  // ...
+} foo_context;
+```
+
+=== Per-Variable Initialization Functions <per_variable_init>
+
+For each global variable `bar` in the module, an inline initialization function is generated:
+
+```c
+// Inline initializer for specific global variable
+static inline void foo_init_bar(foo_context* ctx) {
+  // Initialize the 'bar' field with its initial value
+  ctx->bar = /* initial value */;
+}
+```
+
+These per-variable initialization functions:
+- Are marked `static inline` for efficiency
+- Take the context pointer as their only parameter
+- Set the initial value for one specific global variable
+- Can contain complex initialization logic if needed
+
+=== Main Initialization Function <main_init_function>
+
+The main initialization function `foo_init` calls all per-variable initialization functions:
+
+```c
+void foo_init(foo_context* ctx) {
+  // Call initializer for each global variable
+  foo_init_bar(ctx);
+  foo_init_baz(ctx);
+  foo_init_qux(ctx);
+  // ...
+  
+  // Initialize exception handling if needed
+  ctx->current_exception_context = NULL;
+}
+```
+
+=== Cleanup Function <cleanup_function>
+
+The cleanup function releases any resources allocated during initialization or execution:
+
+```c
+void foo_free(foo_context* ctx) {
+  // Free any dynamically allocated resources
+  // Clean up exception contexts
+  // Reset state if needed
+  
+  // Note: For simple types, this may be empty
+  // Complex types (GMP, large bitvectors) require explicit cleanup
+}
+```
+
+=== Design Rationale <design_rationale>
+
+This three-component design provides several benefits:
+
+*Thread Safety*: Each thread can maintain its own `foo_context` instance, eliminating shared mutable state.
+
+*Composability*: Multiple instances of the same module can coexist (e.g., multi-core simulation).
+
+*Clean Initialization*: Separating per-variable initializers from the main init function:
+- Improves code organization and readability
+- Allows the compiler to inline initialization code effectively
+- Makes it easier to maintain initialization order dependencies
+- Facilitates separate compilation and testing
+
+*Resource Management*: Explicit initialization and cleanup functions make resource lifetimes clear.
+
+*Testing*: Easy to create, initialize, use, and destroy context instances in tests.
+
+=== Example: Complete Module Lowering <complete_module_example>
+
+ASL module:
+```
+var R : bits(64);
+```
+
+MLIR module:
+```mlir
+module {
+  %0 = asl.expr.literal.bitvector "'0000000000000000000000000000000000000000000000000000000000000000'" : !asl.bits<-1 : i64, []>
+  asl.global var "R" : !asl.bits<64 : i64, []> = %0 : !asl.bits<-1 : i64, []>
+}
+```
+
+Lowered to C:
+```c
+// Context structure with all global state
+typedef struct foo_context {
+  uint64_t R;
+} foo_context;
+
+// Per-variable initializers
+static inline void foo_init_R(foo_context* ctx) {
+    ctx->R = 0ULL;
+}
+
+// Main initialization function
+void foo_init(foo_context* ctx) {
+  foo_init_R(ctx);
+}
+
+// Cleanup function
+void foo_free(foo_context* ctx) {
+  // No dynamic allocations in this example
+  // In more complex cases, this would free resources
+}
+
+// Usage example
+int main() {
+  foo_context ctx;
+  foo_init(&ctx);
+  
+  // User logic
+  
+  foo_free(&ctx);
+  return 0;
+}
+```
+
+== Simple Function <example_func>
+
+ASL:
+```
+func square(x: integer) => integer
+begin
+  return x * x;
+end
+```
+
+Lowered to C (EmitC):
+```c
+intmax_t square(intmax_t x) {
+  return x * x;
+}
+```
+
+== Bitvector Slicing <example_slice>
+
+ASL:
+```
+let value: bits(32) = 0xDEADBEEF;
+let slice: bits(8) = value[15:8];
+```
+
+Lowered to C:
+```c
+uint32_t value = 0xDEADBEEFu;
+uint8_t slice = (uint8_t)((value >> 8) & 0xFFu);
+```
+
+== Pattern Matching <example_pattern>
+
+ASL:
+```
+case value of
+  when 0 => action1();
+  when 1..10 => action2();
+  otherwise => action3();
+end
+```
+
+Lowered to C:
+```c
+if (value == 0) {
+  action1();
+} else if (value >= 1 && value <= 10) {
+  action2();
+} else {
+  action3();
+}
+```
+
+== Global Variable Access <example_global_access>
+
+*Note:* See @global_state_management for the complete design of the context structure pattern.
+
+ASL with global variables:
+```
+var register_file: array [32] of bits(64);
+let ZERO_REGISTER: integer = 0;
+
+func read_register(idx: integer) => bits(64)
+begin
+  if idx == ZERO_REGISTER then
+    return Zeros(64);
+  else
+    return register_file[idx];
+  end
+end
+
+func write_register(idx: integer, value: bits(64))
+begin
+  if idx != ZERO_REGISTER then
+    register_file[idx] = value;
+  end
+end
+```
+
+Lowered to C with state struct:
+```c
+// Global state struct
+typedef struct asl_global_state {
+  uint64_t register_file[32];
+} asl_global_state_t;
+
+// Constant (not in state struct)
+static const intmax_t ZERO_REGISTER = 0;
+
+// Initialization function
+void asl_global_state_init(asl_global_state_t* state) {
+  for (int i = 0; i < 32; i++) {
+    state->register_file[i] = 0ULL;
+  }
+}
+
+// Functions with state parameter
+uint64_t read_register(asl_global_state_t* state, intmax_t idx) {
+  if (idx == ZERO_REGISTER) {
+    return 0ULL;
+  } else {
+    return state->register_file[idx];
+  }
+}
+
+void write_register(asl_global_state_t* state, intmax_t idx, uint64_t value) {
+  if (idx != ZERO_REGISTER) {
+    state->register_file[idx] = value;
+  }
+}
+
+// Usage example
+int main() {
+  asl_global_state_t cpu_state;
+  asl_global_state_init(&cpu_state);
+  
+  write_register(&cpu_state, 5, 0x1234567890ABCDEFULL);
+  uint64_t value = read_register(&cpu_state, 5);
+  
+  return 0;
+}
+```
+
+== Thread-Safe Execution <example_thread_safe>
+
+Multiple threads with separate state:
+```c
+// Thread function
+void* cpu_thread(void* arg) {
+  asl_global_state_t* state = (asl_global_state_t*)arg;
+  
+  // Each thread has its own state, no races
+  for (int i = 0; i < 1000; i++) {
+    uint64_t pc = read_register(state, PC_REGISTER);
+    uint32_t insn = fetch_instruction(state, pc);
+    execute_instruction(state, insn);
+  }
+  
+  return NULL;
+}
+
+int main() {
+  // Create separate state for each thread
+  asl_global_state_t core0_state, core1_state;
+  asl_global_state_init(&core0_state);
+  asl_global_state_init(&core1_state);
+  
+  pthread_t thread0, thread1;
+  pthread_create(&thread0, NULL, cpu_thread, &core0_state);
+  pthread_create(&thread1, NULL, cpu_thread, &core1_state);
+  
+  pthread_join(thread0, NULL);
+  pthread_join(thread1, NULL);
+  
+  return 0;
+}
+```
+
+== Real Number Operations <example_real>
+
+ASL with exact rational arithmetic:
+```
+func compute_fraction(a: integer, b: integer) => real
+begin
+  return a / b;  // Exact rational division
+end
+
+func test_real() => integer
+begin
+  let x: real = compute_fraction(1, 3);    // 1/3 exactly
+  let y: real = compute_fraction(1, 6);    // 1/6 exactly
+  let z: real = x + y;                     // 1/3 + 1/6 = 1/2 exactly
+  return CONVERT_INT(z * 10);              // Returns 5
+end
+```
+
+Lowered to C using GMP:
+```c
+#include <gmp.h>
+
+void compute_fraction(mpq_t result, intmax_t a, intmax_t b) {
+  mpq_set_si(result, a, (unsigned long)b);
+  mpq_canonicalize(result);
+}
+
+intmax_t test_real(void) {
+  mpq_t x, y, z, ten, temp;
+  
+  // Initialize all rationals
+  mpq_init(x);
+  mpq_init(y);
+  mpq_init(z);
+  mpq_init(ten);
+  mpq_init(temp);
+  
+  // Compute x = 1/3
+  compute_fraction(x, 1, 3);
+  
+  // Compute y = 1/6
+  compute_fraction(y, 1, 6);
+  
+  // Compute z = x + y = 1/2
+  mpq_add(z, x, y);
+  
+  // Compute z * 10
+  mpq_set_si(ten, 10, 1);
+  mpq_mul(temp, z, ten);
+  
+  // Convert to integer
+  intmax_t result = rational_floor(temp);
+  
+  // Cleanup
+  mpq_clear(x);
+  mpq_clear(y);
+  mpq_clear(z);
+  mpq_clear(ten);
+  mpq_clear(temp);
+  
+  return result;  // Returns 5
+}
+```
+
+=== GMP Linking Requirements <gmp_linking>
+
+Programs using the lowered ASL code with `real` types must link against the GMP library:
+
+```bash
+# Compilation
+gcc -c asl_generated.c -o asl_generated.o
+
+# Linking
+gcc asl_generated.o -lgmp -o program
+
+# Or with pkg-config
+gcc asl_generated.c $(pkg-config --cflags --libs gmp) -o program
+```
+
+The generated C code includes appropriate headers:
+```c
+#include <gmp.h>      // For GMP rational arithmetic
+#include <stdint.h>   // For intmax_t
+#include <stdbool.h>  // For bool
+```
+
+= Exception Lowering
+
+== Exception Types <exception_type_lowering>
+
+ASL exception types (`!asl.exception<fields>`) are lowered to C structs for exception data and use setjmp/longjmp for control flow. This approach provides the closest semantics to ASL exceptions with non-local control flow.
+
+=== Exception Context Structure <exception_context>
+
+The lowering uses C standard library `setjmp`/`longjmp` for exception handling. The exception context is stored in the global state struct for thread safety:
+
+```c
+#include <setjmp.h>
+#include <stdbool.h>
+
+// Exception context for setjmp/longjmp
+typedef struct asl_exception_context {
+  jmp_buf jump_buffer;
+  bool exception_active;
+  int exception_type;
+  void* exception_data;
+  struct asl_exception_context* prev_context;  // For nested try-catch
+} asl_exception_context_t;
+
+// Global state includes exception context
+typedef struct asl_global_state {
+  // ... other global variables ...
+  
+  // Exception handling state
+  asl_exception_context_t* current_exception_context;
+} asl_global_state_t;
+```
+
+=== Exception Type Definitions <exception_types>
+
+Exception types are represented as enums with associated data structures:
+
+```c
+// Exception types as enums
+enum asl_exception_type {
+  ASL_EXCEPTION_NONE = 0,
+  ASL_EXCEPTION_UNPREDICTABLE,
+  ASL_EXCEPTION_SEE,
+  ASL_EXCEPTION_UNDEFINED,
+  ASL_EXCEPTION_CONSTRAINT_ERROR,
+  ASL_EXCEPTION_USER_DEFINED  // User-defined exceptions start from here
+};
+
+// Built-in exception data structures
+typedef struct {
+  const char* message;
+} asl_exception_unpredictable_t;
+
+typedef struct {
+  const char* description;
+} asl_exception_see_t;
+
+typedef struct {
+  const char* reason;
+} asl_exception_undefined_t;
+
+typedef struct {
+  const char* constraint;
+  intmax_t value;
+} asl_exception_constraint_error_t;
+
+// Example user-defined exception structure
+typedef struct {
+  const char* name;
+  uint64_t pc;
+  uint32_t instruction;
+} asl_exception_decode_error_t;
+```
+
+=== Helper Functions <exception_helpers>
+
+Helper functions manage exception context and throwing, taking the global state as parameter:
+
+```c
+// Throw exception
+static inline void asl_throw_exception(asl_global_state_t* state, 
+                                       int type, void* data) {
+  if (state->current_exception_context) {
+    state->current_exception_context->exception_active = true;
+    state->current_exception_context->exception_type = type;
+    state->current_exception_context->exception_data = data;
+    longjmp(state->current_exception_context->jump_buffer, 1);
+  } else {
+    // Uncaught exception - terminate program
+    fprintf(stderr, "Uncaught exception of type %d\n", type);
+    if (data) free(data);
+    abort();
+  }
+}
+```
+
+=== Exception Statement Lowering <exception_stmt_lowering>
+
+==== Throw Statement Lowering <stmt_throw_lowering>
+
+The `asl.stmt.throw` operation is lowered to allocate exception data and call the throw helper with state:
+
+```c
+// ASL: throw Unpredictable;
+asl_exception_unpredictable_t* exc_data = 
+  malloc(sizeof(asl_exception_unpredictable_t));
+exc_data->message = "Unpredictable behavior";
+asl_throw_exception(state, ASL_EXCEPTION_UNPREDICTABLE, exc_data);
+
+// ASL: throw ConstraintError("Value out of range", value);
+asl_exception_constraint_error_t* exc_data = 
+  malloc(sizeof(asl_exception_constraint_error_t));
+exc_data->constraint = "Value out of range";
+exc_data->value = value;
+asl_throw_exception(state, ASL_EXCEPTION_CONSTRAINT_ERROR, exc_data);
+```
+
+==== Try-Catch Statement Lowering <stmt_try_lowering>
+
+The `asl.stmt.try` operation is lowered to setjmp/longjmp-based structured exception handling with state management:
+
+```c
+// Setup exception context
+asl_exception_context_t exc_ctx;
+exc_ctx.prev_context = state->current_exception_context;
+state->current_exception_context = &exc_ctx;
+
+// Set jump point
+if (setjmp(exc_ctx.jump_buffer) == 0) {
+  // Try block
+  protected_code(state);
+} else {
+  // Exception was thrown
+  switch (exc_ctx.exception_type) {
+    case ASL_EXCEPTION_UNPREDICTABLE: {
+      asl_exception_unpredictable_t* data = 
+        (asl_exception_unpredictable_t*)exc_ctx.exception_data;
+      // Handle unpredictable exception
+      handle_unpredictable(state, data);
+      break;
+    }
+    case ASL_EXCEPTION_CONSTRAINT_ERROR: {
+      asl_exception_constraint_error_t* data = 
+        (asl_exception_constraint_error_t*)exc_ctx.exception_data;
+      // Handle constraint error
+      handle_constraint_error(state, data);
+      break;
+    }
+    default:
+      // Otherwise block or re-throw
+      state->current_exception_context = exc_ctx.prev_context;
+      if (exc_ctx.prev_context) {
+        longjmp(exc_ctx.prev_context->jump_buffer, 1);
+      } else {
+        fprintf(stderr, "Unhandled exception type: %d\n", 
+                exc_ctx.exception_type);
+        abort();
+      }
+  }
+  
+  // Cleanup exception data
+  if (exc_ctx.exception_data) {
+    free(exc_ctx.exception_data);
+    exc_ctx.exception_data = NULL;
+  }
+}
+
+// Restore previous context
+state->current_exception_context = exc_ctx.prev_context;
+```
+
+=== Exception Type Structure Lowering <exception_type_struct>
+
+Exception types with fields are lowered to C structs:
+
+```c
+// ASL exception type definition:
+// exception DecodeError of {
+//   pc: bits(64),
+//   instruction: bits(32),
+//   reason: string
+// };
+
+typedef struct {
+  uint64_t pc;
+  uint32_t instruction;
+  const char* reason;
+} asl_exception_decode_error_t;
+
+// Exception type enum entry
+#define ASL_EXCEPTION_DECODE_ERROR (ASL_EXCEPTION_USER_DEFINED + 1)
+
+// Throwing the exception
+void throw_decode_error(asl_global_state_t* state, 
+                        uint64_t pc, uint32_t insn, const char* reason) {
+  asl_exception_decode_error_t* exc = 
+    malloc(sizeof(asl_exception_decode_error_t));
+  exc->pc = pc;
+  exc->instruction = insn;
+  exc->reason = reason;
+  asl_throw_exception(state, ASL_EXCEPTION_DECODE_ERROR, exc);
+}
+
+// Catching the exception
+if (exc_ctx.exception_type == ASL_EXCEPTION_DECODE_ERROR) {
+  asl_exception_decode_error_t* data = 
+    (asl_exception_decode_error_t*)exc_ctx.exception_data;
+  printf("Decode error at PC 0x%lx: %s\n", data->pc, data->reason);
+  free(data);
+}
+```
+
+= Exception Handling Examples <example_exceptions>
+
+=== Simple Exception Throw and Catch <example_simple_exception>
+
+ASL code with exception handling:
+```
+exception DivideByZero;
+
+func safe_divide(a: integer, b: integer) => integer
+begin
+  if b == 0 then
+    throw DivideByZero;
+  end
+  return a / b;
+end
+
+func test_divide(a: integer, b: integer) => integer
+begin
+  try
+    return safe_divide(a, b);
+  catch
+    when DivideByZero =>
+      return 0;
+  end
+end
+```
+
+Lowered to C using setjmp/longjmp with global state:
+```c
+#include <setjmp.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdbool.h>
+
+// Exception type definitions
+enum asl_exception_type {
+  ASL_EXCEPTION_NONE = 0,
+  ASL_EXCEPTION_DIVIDE_BY_ZERO = 1
+};
+
+typedef struct asl_exception_context {
+  jmp_buf jump_buffer;
+  bool exception_active;
+  int exception_type;
+  void* exception_data;
+  struct asl_exception_context* prev_context;
+} asl_exception_context_t;
+
+typedef struct asl_global_state {
+  // Exception handling state
+  asl_exception_context_t* current_exception_context;
+  
+  // Other global state would be here
+} asl_global_state_t;
+
+static inline void asl_throw_exception(asl_global_state_t* state,
+                                       int type, void* data) {
+  if (state->current_exception_context) {
+    state->current_exception_context->exception_active = true;
+    state->current_exception_context->exception_type = type;
+    state->current_exception_context->exception_data = data;
+    longjmp(state->current_exception_context->jump_buffer, 1);
+  } else {
+    fprintf(stderr, "Uncaught exception of type %d\n", type);
+    abort();
+  }
+}
+
+// Initialize global state
+void asl_global_state_init(asl_global_state_t* state) {
+  state->current_exception_context = NULL;
+}
+
+// Function implementations
+intmax_t safe_divide(asl_global_state_t* state, intmax_t a, intmax_t b) {
+  if (b == 0) {
+    asl_throw_exception(state, ASL_EXCEPTION_DIVIDE_BY_ZERO, NULL);
+  }
+  return a / b;
+}
+
+intmax_t test_divide(asl_global_state_t* state, intmax_t a, intmax_t b) {
+  // Setup exception context
+  asl_exception_context_t exc_ctx = {0};
+  exc_ctx.prev_context = state->current_exception_context;
+  state->current_exception_context = &exc_ctx;
+  
+  intmax_t result = 0;
+  
+  // Set jump point
+  if (setjmp(exc_ctx.jump_buffer) == 0) {
+    // Try block
+    result = safe_divide(state, a, b);
+  } else {
+    // Exception was thrown
+    if (exc_ctx.exception_type == ASL_EXCEPTION_DIVIDE_BY_ZERO) {
+      // Catch DivideByZero
+      result = 0;
+    } else {
+      // Re-throw unhandled exception
+      state->current_exception_context = exc_ctx.prev_context;
+      if (exc_ctx.prev_context) {
+        longjmp(exc_ctx.prev_context->jump_buffer, 1);
+      }
+    }
+  }
+  
+  // Restore previous context
+  state->current_exception_context = exc_ctx.prev_context;
+  return result;
+}
+```
+
+=== Exception with Data Fields <example_exception_with_data>
+
+ASL code with exception carrying data:
+```
+exception ValidationError of {
+  field_name: string,
+  expected: integer,
+  actual: integer
+};
+
+func validate_range(name: string, value: integer, min: integer, max: integer)
+begin
+  if value < min || value > max then
+    throw ValidationError {
+      field_name = name,
+      expected = max,
+      actual = value
+    };
+  end
+end
+
+func process_value(value: integer) => integer
+begin
+  try
+    validate_range("input", value, 0, 100);
+    return value * 2;
+  catch
+    when ValidationError => ve =>
+      print("Validation failed for ", ve.field_name);
+      print("Expected <= ", ve.expected, ", got ", ve.actual);
+      return -1;
+  end
+end
+```
+
+Lowered to C:
+```c
+#include <setjmp.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdbool.h>
+
+// Exception definitions
+enum asl_exception_type {
+  ASL_EXCEPTION_NONE = 0,
+  ASL_EXCEPTION_VALIDATION_ERROR = 1
+};
+
+typedef struct {
+  const char* field_name;
+  intmax_t expected;
+  intmax_t actual;
+} asl_exception_validation_error_t;
+
+typedef struct asl_exception_context {
+  jmp_buf jump_buffer;
+  bool exception_active;
+  int exception_type;
+  void* exception_data;
+  struct asl_exception_context* prev_context;
+} asl_exception_context_t;
+
+typedef struct asl_global_state {
+  asl_exception_context_t* current_exception_context;
+} asl_global_state_t;
+
+static inline void asl_throw_exception(asl_global_state_t* state,
+                                       int type, void* data) {
+  if (state->current_exception_context) {
+    state->current_exception_context->exception_active = true;
+    state->current_exception_context->exception_type = type;
+    state->current_exception_context->exception_data = data;
+    longjmp(state->current_exception_context->jump_buffer, 1);
+  } else {
+    fprintf(stderr, "Uncaught exception of type %d\n", type);
+    if (data) free(data);
+    abort();
+  }
+}
+
+// Function implementations
+void validate_range(asl_global_state_t* state, const char* name, 
+                    intmax_t value, intmax_t min, intmax_t max) {
+  if (value < min || value > max) {
+    asl_exception_validation_error_t* exc = 
+      malloc(sizeof(asl_exception_validation_error_t));
+    exc->field_name = name;
+    exc->expected = max;
+    exc->actual = value;
+    asl_throw_exception(state, ASL_EXCEPTION_VALIDATION_ERROR, exc);
+  }
+}
+
+intmax_t process_value(asl_global_state_t* state, intmax_t value) {
+  // Setup exception context
+  asl_exception_context_t exc_ctx = {0};
+  exc_ctx.prev_context = state->current_exception_context;
+  state->current_exception_context = &exc_ctx;
+  
+  intmax_t result = 0;
+  
+  if (setjmp(exc_ctx.jump_buffer) == 0) {
+    // Try block
+    validate_range(state, "input", value, 0, 100);
+    result = value * 2;
+  } else {
+    // Exception was thrown
+    if (exc_ctx.exception_type == ASL_EXCEPTION_VALIDATION_ERROR) {
+      // Catch ValidationError
+      asl_exception_validation_error_t* ve = 
+        (asl_exception_validation_error_t*)exc_ctx.exception_data;
+      
+      printf("Validation failed for %s\n", ve->field_name);
+      printf("Expected <= %jd, got %jd\n", ve->expected, ve->actual);
+      
+      free(ve);
+      exc_ctx.exception_data = NULL;
+      result = -1;
+    } else {
+      // Re-throw
+      state->current_exception_context = exc_ctx.prev_context;
+      if (exc_ctx.prev_context) {
+        longjmp(exc_ctx.prev_context->jump_buffer, 1);
+      }
+    }
+  }
+  
+  // Restore context
+  state->current_exception_context = exc_ctx.prev_context;
+  return result;
+}
+```
+
+=== Nested Try-Catch Blocks <example_nested_try_catch>
+
+ASL code with nested exception handling:
+```
+exception OuterError;
+exception InnerError of { code: integer };
+
+func inner_function(x: integer) => integer
+begin
+  if x < 0 then
+    throw InnerError { code = x };
+  end
+  return x * 2;
+end
+
+func outer_function(x: integer) => integer
+begin
+  try
+    let y = inner_function(x);
+    if y > 100 then
+      throw OuterError;
+    end
+    return y;
+  catch
+    when InnerError => ie =>
+      print("Inner error with code: ", ie.code);
+      return 0;
+  end
+end
+
+func main_function(x: integer) => integer
+begin
+  try
+    return outer_function(x);
+  catch
+    when OuterError =>
+      print("Outer error caught");
+      return -1;
+    otherwise =>
+      print("Unknown error");
+      return -2;
+  end
+end
+```
+
+Lowered to C:
+```c
+// Exception types
+enum asl_exception_type {
+  ASL_EXCEPTION_NONE = 0,
+  ASL_EXCEPTION_OUTER_ERROR = 1,
+  ASL_EXCEPTION_INNER_ERROR = 2
+};
+
+typedef struct {
+  intmax_t code;
+} asl_exception_inner_error_t;
+
+// ... (exception context and state definitions as before) ...
+
+intmax_t inner_function(asl_global_state_t* state, intmax_t x) {
+  if (x < 0) {
+    asl_exception_inner_error_t* exc = 
+      malloc(sizeof(asl_exception_inner_error_t));
+    exc->code = x;
+    asl_throw_exception(state, ASL_EXCEPTION_INNER_ERROR, exc);
+  }
+  return x * 2;
+}
+
+intmax_t outer_function(asl_global_state_t* state, intmax_t x) {
+  asl_exception_context_t exc_ctx = {0};
+  exc_ctx.prev_context = state->current_exception_context;
+  state->current_exception_context = &exc_ctx;
+  
+  intmax_t result = 0;
+  
+  if (setjmp(exc_ctx.jump_buffer) == 0) {
+    // Try block
+    intmax_t y = inner_function(state, x);
+    if (y > 100) {
+      asl_throw_exception(state, ASL_EXCEPTION_OUTER_ERROR, NULL);
+    }
+    result = y;
+  } else {
+    // Exception was thrown
+    if (exc_ctx.exception_type == ASL_EXCEPTION_INNER_ERROR) {
+      // Catch InnerError
+      asl_exception_inner_error_t* ie = 
+        (asl_exception_inner_error_t*)exc_ctx.exception_data;
+      printf("Inner error with code: %jd\n", ie->code);
+      free(ie);
+      result = 0;
+    } else {
+      // Re-throw (not caught here)
+      state->current_exception_context = exc_ctx.prev_context;
+      if (exc_ctx.prev_context) {
+        longjmp(exc_ctx.prev_context->jump_buffer, 1);
+      }
+    }
+  }
+  
+  state->current_exception_context = exc_ctx.prev_context;
+  return result;
+}
+
+intmax_t main_function(asl_global_state_t* state, intmax_t x) {
+  asl_exception_context_t exc_ctx = {0};
+  exc_ctx.prev_context = state->current_exception_context;
+  state->current_exception_context = &exc_ctx;
+  
+  intmax_t result = 0;
+  
+  if (setjmp(exc_ctx.jump_buffer) == 0) {
+    // Try block
+    result = outer_function(state, x);
+  } else {
+    // Exception was thrown
+    if (exc_ctx.exception_type == ASL_EXCEPTION_OUTER_ERROR) {
+      // Catch OuterError
+      printf("Outer error caught\n");
+      result = -1;
+    } else {
+      // Otherwise clause
+      printf("Unknown error\n");
+      result = -2;
+    }
+    
+    if (exc_ctx.exception_data) {
+      free(exc_ctx.exception_data);
+    }
+  }
+  
+  state->current_exception_context = exc_ctx.prev_context;
+  return result;
+}
+```
+
+=== Exception Handling with Global State <example_exception_global_state>
+
+ASL code with exceptions accessing global state:
+```
+exception StateError of { current_state: integer };
+
+var system_state: integer = 0;
+
+func update_state(new_state: integer)
+begin
+  if new_state < 0 || new_state > 10 then
+    throw StateError { current_state = system_state };
+  end
+  system_state = new_state;
+end
+
+func safe_update(new_value: integer) => integer
+begin
+  try
+    update_state(new_value);
+    return system_state;
+  catch
+    when StateError => se =>
+      print("State error, current: ", se.current_state);
+      return se.current_state;
+  end
+end
+```
+
+Lowered to C with integrated exception and global state:
+```c
+// Global state with both system variables and exception context
+typedef struct asl_global_state {
+  // System state variables
+  intmax_t system_state;
+  
+  // Exception handling state
+  asl_exception_context_t* current_exception_context;
+} asl_global_state_t;
+
+// Exception definitions
+typedef struct {
+  intmax_t current_state;
+} asl_exception_state_error_t;
+
+#define ASL_EXCEPTION_STATE_ERROR 1
+
+// ... (exception context and throw helper as before) ...
+
+void asl_global_state_init(asl_global_state_t* state) {
+  state->system_state = 0;
+  state->current_exception_context = NULL;
+}
+
+void update_state(asl_global_state_t* state, intmax_t new_state) {
+  if (new_state < 0 || new_state > 10) {
+    asl_exception_state_error_t* exc = 
+      malloc(sizeof(asl_exception_state_error_t));
+    exc->current_state = state->system_state;
+    asl_throw_exception(state, ASL_EXCEPTION_STATE_ERROR, exc);
+  }
+  state->system_state = new_state;
+}
+
+intmax_t safe_update(asl_global_state_t* state, intmax_t new_value) {
+  asl_exception_context_t exc_ctx = {0};
+  exc_ctx.prev_context = state->current_exception_context;
+  state->current_exception_context = &exc_ctx;
+  
+  intmax_t result = 0;
+  
+  if (setjmp(exc_ctx.jump_buffer) == 0) {
+    // Try block
+    update_state(state, new_value);
+    result = state->system_state;
+  } else {
+    // Exception was thrown
+    if (exc_ctx.exception_type == ASL_EXCEPTION_STATE_ERROR) {
+      // Catch StateError
+      asl_exception_state_error_t* se = 
+        (asl_exception_state_error_t*)exc_ctx.exception_data;
+      printf("State error, current: %jd\n", se->current_state);
+      result = se->current_state;
+      free(se);
+    } else {
+      // Re-throw
+      state->current_exception_context = exc_ctx.prev_context;
+      if (exc_ctx.prev_context) {
+        longjmp(exc_ctx.prev_context->jump_buffer, 1);
+      }
+    }
+  }
+  
+  state->current_exception_context = exc_ctx.prev_context;
+  return result;
+}
+```
