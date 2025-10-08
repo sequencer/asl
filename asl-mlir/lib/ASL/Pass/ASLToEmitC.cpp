@@ -73,8 +73,16 @@ public:
       return convertRealType(type);
     });
 
+    // Convert MLIR i1 type (representing ASL bool) to C bool
+    // Note: ASL boolean type is represented by the standard i1 type in MLIR
+    addConversion([this](IntegerType type) -> std::optional<Type> {
+      if (type.getWidth() == 1) {
+        return convertBoolType(type);
+      }
+      return std::nullopt;
+    });
+
     // TODO: Add more ASL type conversions
-    // - !asl.bool -> i1
     // - !asl.string -> emitc.opaque<"const char*">
   }
 
@@ -94,6 +102,17 @@ private:
     // This ensures correctness since ASL reals represent exact rational numbers
     // (p/q where p and q are integers), not floating-point approximations
     return emitc::OpaqueType::get(context, "mpq_t");
+  }
+
+  // Convert i1 type (representing ASL bool) to C bool
+  Type convertBoolType(IntegerType type) {
+    // ASL boolean types are represented by MLIR's i1 type and converted to
+    // C's standard bool type from <stdbool.h>
+    // This provides a natural and efficient representation for boolean logic
+    // Unlike integers or rationals which require GMP for correctness, booleans
+    // have a finite domain and map directly to C's native boolean type without
+    // loss of semantic information
+    return emitc::OpaqueType::get(context, "bool");
   }
 
   // Convert ASL bits type to C integer type based on width
@@ -539,7 +558,23 @@ private:
       }
     } else {
       // For simple types, direct assignment
-      initFunc += "  ctx->" + varName + " = " + initialValue + ";\n";
+      // Special handling for bool: emit 'false' or 'true' instead of 0/1
+      bool isBool = false;
+      if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(convertedType)) {
+        isBool = (opaqueType.getValue() == "bool");
+      }
+      if (isBool) {
+        // Use the literal value if available, otherwise default to false
+        std::string boolValue = "false";
+        // Accept '0', '1', or string literal 'true'/'false' from IR
+        if (literal == "1" || literal == "true" || literal == "TRUE")
+          boolValue = "true";
+        else if (literal == "0" || literal == "false" || literal == "FALSE")
+          boolValue = "false";
+        initFunc += "  ctx->" + varName + " = " + boolValue + ";\n";
+      } else {
+        initFunc += "  ctx->" + varName + " = " + initialValue + ";\n";
+      }
     }
 
     initFunc += "}";

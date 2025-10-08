@@ -1,6 +1,10 @@
 // RUN: asl-json-backend --no-std %s > %t.json
 // RUN: asl-opt --canonicalize --run-asl-to-emitc --emitc --json-input %t.json | FileCheck %s
 
+// CHECK: #include <gmp.h>
+// CHECK: #include <stdint.h>
+// CHECK: #include <stdbool.h>
+// CHECK: #include <string.h>
 // CHECK: typedef struct asl_context {
 // CHECK:   uint8_t Bits1;
 // CHECK:   uint16_t Bits9;
@@ -12,6 +16,13 @@
 // CHECK:   uint32_t Bits17_init;
 // CHECK:   uint64_t Bits33_init;
 // CHECK:   struct { uint64_t words[2]; } Bits65_init;
+// CHECK:   mpz_t Int;
+// CHECK:   mpz_t Int_init;
+// CHECK:   mpq_t Real;
+// CHECK:   mpq_t RealPi_init;
+// CHECK:   bool Bool_init;
+// CHECK:   bool BoolT_init;
+// CHECK:   const char* message;
 // CHECK: } asl_context;
 var Bits1 : bits(1);
 var Bits9 : bits(9);
@@ -72,3 +83,12 @@ var RealPi_init : real = 3.14;
 // TODO: real folding
 // var RealMinusOne_init : real = -1.0;
 
+// CHECK: static inline void asl_init_Bool_init(asl_context* ctx) {
+// CHECK:   ctx->Bool_init = false;
+// CHECK: }
+var Bool : boolean;
+
+// CHECK: static inline void asl_init_BoolT_init(asl_context* ctx) {
+// CHECK:   ctx->BoolT_init = true;
+// CHECK: }
+var BoolT_init : boolean = TRUE;

@@ -536,6 +536,208 @@ static inline instruction_t instruction_set_opcode(instruction_t insn, uint8_t o
 // ... similar setters for other fields
 ```
 
+== Boolean Types <bool_type_lowering>
+
+ASL boolean types (`!asl.bool`) represent logical truth values and are lowered to C's standard `bool` type from `<stdbool.h>`. This provides a natural and efficient representation for boolean logic in the generated C code.
+
+#table(
+  columns: 3,
+  [ASL Type], [C Type], [Notes],
+  [`!asl.bool`], [`bool`], [Standard C99 boolean type (`true`/`false`)],
+)
+
+=== Boolean Type Semantics <bool_semantics>
+
+ASL boolean types have straightforward semantics that map cleanly to C:
+
+- *Two Values*: Only `true` and `false` are valid boolean values
+- *Logical Operations*: AND, OR, NOT, XOR operations on booleans
+- *Comparison Results*: Comparison operations (`==`, `!=`, `<`, `>`, `<=`, `>=`) produce boolean values
+- *Control Flow*: Booleans are used in conditional expressions and loop conditions
+
+=== C Boolean Type (`bool`) <c_bool_type>
+
+The C99 `bool` type from `<stdbool.h>` provides:
+
+- Standard boolean values: `true` (1) and `false` (0)
+- Implicit conversion from integer types (0 is `false`, non-zero is `true`)
+- Small memory footprint (typically 1 byte)
+- Native support for logical operations
+
+=== Boolean Operations <bool_operations>
+
+ASL boolean operations are lowered to C logical operators:
+
+#table(
+  columns: 3,
+  [ASL Operation], [C Operator], [Notes],
+  [Logical AND `a && b`], [`a && b`], [Short-circuit evaluation],
+  [Logical OR `a || b`], [`a || b`], [Short-circuit evaluation],
+  [Logical NOT `!a`], [`!a`], [Negation],
+  [Logical XOR `a ^ b`], [`a != b`], [Exclusive OR (inequality for booleans)],
+  [Equality `a == b`], [`a == b`], [Boolean equality],
+  [Inequality `a != b`], [`a != b`], [Boolean inequality],
+)
+
+=== Boolean Literals <bool_literals>
+
+Boolean literals are lowered directly to C boolean constants:
+
+*ASL boolean literals:*
+```asl
+let t: boolean = TRUE;
+let f: boolean = FALSE;
+```
+
+*Lowered to C:*
+```c
+bool t = true;
+bool f = false;
+```
+
+=== Boolean Expressions <bool_expressions>
+
+Complex boolean expressions are lowered preserving short-circuit evaluation semantics:
+
+*ASL boolean expression:*
+```asl
+func check_valid(x: integer, y: integer) => boolean
+begin
+  return x > 0 && y > 0 && x < 100;
+end
+```
+
+*Lowered to C:*
+```c
+bool check_valid(const mpz_t x, const mpz_t y) {
+  // Compare GMP integers with constants
+  return mpz_cmp_si(x, 0) > 0 && 
+         mpz_cmp_si(y, 0) > 0 && 
+         mpz_cmp_si(x, 100) < 0;
+}
+```
+
+=== Conditional Expressions <bool_conditionals>
+
+ASL conditional expressions using booleans map to C's ternary operator or if-statements:
+
+*ASL conditional with boolean:*
+```asl
+func max(a: integer, b: integer) => integer
+begin
+  return if a > b then a else b;
+end
+```
+
+*Lowered to C:*
+```c
+void max_value(mpz_t result, const mpz_t a, const mpz_t b) {
+  bool condition = mpz_cmp(a, b) > 0;
+  if (condition) {
+    mpz_set(result, a);
+  } else {
+    mpz_set(result, b);
+  }
+}
+```
+
+=== Boolean to Integer Conversion <bool_to_int_conversion>
+
+When booleans need to be converted to integers (e.g., for array indexing or arithmetic):
+
+*ASL boolean to integer conversion:*
+```asl
+func bool_to_int(b: boolean) => integer
+begin
+  return if b then 1 else 0;
+end
+```
+
+*Lowered to C:*
+```c
+void bool_to_int(mpz_t result, bool b) {
+  mpz_set_ui(result, b ? 1 : 0);
+}
+```
+
+=== Integer to Boolean Conversion <int_to_bool_conversion>
+
+When integers need to be converted to booleans (following C convention where 0 is false, non-zero is true):
+
+*ASL integer to boolean conversion:*
+```asl
+func int_to_bool(x: integer) => boolean
+begin
+  return x != 0;
+end
+```
+
+*Lowered to C:*
+```c
+bool int_to_bool(const mpz_t x) {
+  return mpz_cmp_si(x, 0) != 0;
+}
+```
+
+=== Boolean Fields in Structures <bool_in_structures>
+
+When booleans appear in structures or as global state, they use the `bool` type:
+
+*ASL with boolean state:*
+```asl
+var system_enabled: boolean;
+var debug_mode: boolean;
+```
+
+*Lowered to C context structure:*
+```c
+typedef struct asl_context {
+  bool system_enabled;
+  bool debug_mode;
+  // ... other fields
+} asl_context_t;
+
+void asl_context_init(asl_context_t* ctx) {
+  ctx->system_enabled = false;
+  ctx->debug_mode = false;
+}
+```
+
+=== Boolean Arrays <bool_arrays>
+
+Boolean arrays are lowered to arrays of `bool`:
+
+*ASL boolean array:*
+```asl
+var flags: array [8] of boolean;
+```
+
+*Lowered to C:*
+```c
+typedef struct asl_context {
+  bool flags[8];
+  // ... other fields
+} asl_context_t;
+
+void asl_context_init(asl_context_t* ctx) {
+  for (int i = 0; i < 8; i++) {
+    ctx->flags[i] = false;
+  }
+}
+```
+
+=== Rationale for C `bool` Type <bool_rationale>
+
+Using C's `bool` type for ASL booleans ensures:
+
+1. *Semantic Clarity*: Code is self-documenting with explicit boolean types
+2. *Type Safety*: C compilers can catch type mismatches involving booleans
+3. *Efficiency*: `bool` uses minimal memory (typically 1 byte)
+4. *Standard Compliance*: Leverages standard C99 features for portability
+5. *Natural Mapping*: ASL boolean semantics align perfectly with C boolean semantics
+
+Unlike integers or rationals which require GMP for correctness, booleans have a finite domain and map directly to C's native boolean type without loss of semantic information.
+
 = Global State Management <global_state_management>
 
 Each MLIR module is lowered to C code with a structured approach to managing global state. This design ensures thread safety, clean initialization, and proper resource management.
