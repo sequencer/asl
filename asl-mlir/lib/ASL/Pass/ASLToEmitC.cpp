@@ -49,6 +49,21 @@ namespace asl {
 namespace {
 
 //===----------------------------------------------------------------------===//
+// Helper Functions
+//===----------------------------------------------------------------------===//
+
+// Generate a sanitized identifier for C
+static std::string sanitizeIdentifier(StringRef name) {
+  std::string result = name.str();
+  // Replace invalid C identifier characters with underscores
+  for (char &c : result) {
+    if (!llvm::isAlnum(c) && c != '_')
+      c = '_';
+  }
+  return result;
+}
+
+//===----------------------------------------------------------------------===//
 // Type Converter
 //===----------------------------------------------------------------------===//
 
@@ -85,6 +100,21 @@ public:
     // Convert ASL string type to C const char*
     addConversion([this](asl::StringType type) -> std::optional<Type> {
       return convertStringType(type);
+    });
+
+    // Convert ASL enum type to C enum (represented as opaque type)
+    addConversion([this](asl::EnumType type) -> std::optional<Type> {
+      return convertEnumType(type);
+    });
+
+    // Convert ASL named type by resolving to underlying type
+    addConversion([this](asl::NamedType type) -> std::optional<Type> {
+      return convertNamedType(type);
+    });
+
+    // Convert ASL label type to C enum value (int)
+    addConversion([this](asl::LabelType type) -> std::optional<Type> {
+      return convertLabelType(type);
     });
 
     // TODO: Add more ASL type conversions
@@ -170,22 +200,52 @@ private:
       return emitc::OpaqueType::get(context, structType);
     }
   }
-};
 
-//===----------------------------------------------------------------------===//
-// Helper Functions
-//===----------------------------------------------------------------------===//
+  // Convert ASL enum type to C enum (represented as opaque type)
+  Type convertEnumType(asl::EnumType type) {
+    // Generate enum type name from labels
+    // For now, use a generic enum type - the actual typedef will be generated
+    // when we see the type declaration
+    // We represent it as the sanitized enum type name
 
-// Generate a sanitized identifier for C
-static std::string sanitizeIdentifier(StringRef name) {
-  std::string result = name.str();
-  // Replace invalid C identifier characters with underscores
-  for (char &c : result) {
-    if (!llvm::isAlnum(c) && c != '_')
-      c = '_';
+    // Extract labels to create a deterministic type name
+    auto labels = type.getStringLabels();
+    if (labels.empty()) {
+      return emitc::OpaqueType::get(context, "int");
+    }
+
+    // Create a type name based on first label (will be refined by type decl)
+    // For anonymous enums, use int
+    return emitc::OpaqueType::get(context, "int");
   }
-  return result;
-}
+
+  // Convert ASL named type by resolving to underlying type
+  Type convertNamedType(asl::NamedType type) {
+    // If the named type has a resolved type attribute, convert that
+    if (type.getResolvedType()) {
+      Type resolvedType = type.getResolvedType().getValue();
+      if (auto enumType = llvm::dyn_cast<asl::EnumType>(resolvedType)) {
+        // Use the name for the enum type with asl_ prefix
+        std::string enumTypeName =
+            "asl_" + sanitizeIdentifier(type.getName().str());
+        return emitc::OpaqueType::get(context, enumTypeName);
+      }
+      // Recursively convert the resolved type
+      return convertType(resolvedType);
+    }
+
+    // Otherwise, assume it's an enum type and use the name with asl_ prefix
+    std::string typeName = "asl_" + sanitizeIdentifier(type.getName().str());
+    return emitc::OpaqueType::get(context, typeName);
+  }
+
+  // Convert ASL label type to C enum value (int)
+  Type convertLabelType(asl::LabelType type) {
+    // Label literals will be resolved to specific enum values
+    // The type itself is just an int
+    return emitc::OpaqueType::get(context, "int");
+  }
+};
 
 //===----------------------------------------------------------------------===//
 // Conversion Patterns
@@ -309,6 +369,53 @@ struct LiteralBitvectorOpLowering
   }
 };
 
+// Convert asl.expr.literal.label to emitc.constant with enum value
+struct LiteralLabelOpLowering
+    : public OpConversionPattern<asl::LiteralLabelOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::LiteralLabelOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Get the label value
+    StringRef label = op.getValue();
+
+    // Convert the type
+    Type convertedType = getTypeConverter()->convertType(op.getType());
+    if (!convertedType)
+      return failure();
+
+    // The label will be used as an enum constant
+    // We need to find the enum type this label belongs to
+    // For now, we'll emit it as a reference to the enum constant
+    // The actual enum type name will be determined from context
+
+    // Create EmitC constant with the label as an identifier
+    // This will be emitted as: EnumType_LABEL
+    // The enum type prefix will be added during global var initialization
+    auto constantOp = rewriter.create<emitc::ConstantOp>(
+        op.getLoc(), convertedType,
+        emitc::OpaqueAttr::get(rewriter.getContext(), label.str()));
+
+    rewriter.replaceOp(op, constantOp.getResult());
+    return success();
+  }
+};
+
+// Convert asl.type_decl operation to EmitC typedef (for enums)
+struct TypeDeclOpLowering : public OpConversionPattern<asl::TypeDeclOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::TypeDeclOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // This pattern just removes the type decl op
+    // The actual typedef generation happens in the pass
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Pass Implementation
 //===----------------------------------------------------------------------===//
@@ -349,8 +456,13 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
 
     // Add conversion patterns
     patterns.add<ConstantInitGlobalStorageDeclOpLowering,
-                 LiteralStringOpLowering, LiteralBitvectorOpLowering>(
-        typeConverter, context);
+                 LiteralStringOpLowering, LiteralBitvectorOpLowering,
+                 LiteralLabelOpLowering, TypeDeclOpLowering>(typeConverter,
+                                                             context);
+
+    // Collect type declarations before conversion for typedef generation
+    SmallVector<asl::TypeDeclOp> typeDecls;
+    module.walk([&](asl::TypeDeclOp op) { typeDecls.push_back(op); });
 
     // Collect global variables before conversion for context struct generation
     SmallVector<asl::ConstantInitGlobalStorageDeclOp> globalVars;
@@ -358,9 +470,9 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
       globalVars.push_back(op);
     });
 
-    // Generate context structure, init, and free functions
-    if (!globalVars.empty()) {
-      generateGlobalContext(module, globalVars, typeConverter);
+    // Generate enum typedefs and context structure
+    if (!typeDecls.empty() || !globalVars.empty()) {
+      generateGlobalContext(module, typeDecls, globalVars, typeConverter);
     }
 
     // Apply conversion
@@ -371,9 +483,9 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
   }
 
 private:
-  // Generate the context structure and init/free functions for global variables
+  // Generate enum typedefs, context structure and init/free functions
   void generateGlobalContext(
-      ModuleOp module,
+      ModuleOp module, ArrayRef<asl::TypeDeclOp> typeDecls,
       ArrayRef<asl::ConstantInitGlobalStorageDeclOp> globalVars,
       ASLToEmitCTypeConverter &typeConverter) {
     OpBuilder builder(module.getContext());
@@ -393,7 +505,12 @@ private:
     // 0. Generate necessary includes
     generateIncludes(builder, loc);
 
-    // 1. Generate typedef struct definition using emitc.verbatim
+    // 1. Generate enum typedefs for type declarations
+    for (auto typeDecl : typeDecls) {
+      generateEnumTypedef(builder, loc, typeDecl);
+    }
+
+    // 2. Generate typedef struct definition using emitc.verbatim
     generateContextStruct(builder, loc, contextTypeName, globalVars,
                           typeConverter);
 
@@ -410,6 +527,40 @@ private:
     // 4. Generate free function
     generateFreeFunction(builder, loc, moduleName, contextTypeName, globalVars,
                          typeConverter);
+  }
+
+  // Generate enum typedef from type declaration
+  void generateEnumTypedef(OpBuilder &builder, Location loc,
+                           asl::TypeDeclOp typeDecl) {
+    // Only generate typedef for enum types
+    Type declType = typeDecl.getType();
+    auto enumType = llvm::dyn_cast<asl::EnumType>(declType);
+    if (!enumType)
+      return;
+
+    // Get the type name with asl_ prefix to avoid collisions
+    std::string typeName =
+        "asl_" + sanitizeIdentifier(typeDecl.getIdentifier());
+
+    // Generate enum typedef
+    std::string enumDef = "typedef enum " + typeName + " {\n";
+
+    // Add enum constants
+    auto labels = enumType.getStringLabels();
+    for (size_t i = 0; i < labels.size(); ++i) {
+      std::string labelName = sanitizeIdentifier(labels[i].str());
+      enumDef += "  " + typeName + "_" + labelName + " = " + std::to_string(i);
+      if (i < labels.size() - 1) {
+        enumDef += ",\n";
+      } else {
+        enumDef += "\n";
+      }
+    }
+
+    enumDef += "} " + typeName + ";";
+
+    // Create verbatim op for enum typedef
+    builder.create<emitc::VerbatimOp>(loc, enumDef);
   }
 
   // Generate necessary C includes
@@ -466,14 +617,25 @@ private:
     Type varType = globalVar.getType();
     Type convertedType = typeConverter.convertType(varType);
 
-    // Check if this is a GMP type or string type
+    // Check if this is a GMP type, string type, or enum type
     bool isGMPInt = false;
     bool isGMPRational = false;
     bool isString = false;
+    bool isEnum = false;
+    std::string enumTypeName;
+
     if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(convertedType)) {
-      isGMPInt = (opaqueType.getValue() == "mpz_t");
-      isGMPRational = (opaqueType.getValue() == "mpq_t");
-      isString = (opaqueType.getValue() == "const char*");
+      StringRef typeName = opaqueType.getValue();
+      isGMPInt = (typeName == "mpz_t");
+      isGMPRational = (typeName == "mpq_t");
+      isString = (typeName == "const char*");
+      // Check if it's an enum type (not one of the standard types)
+      if (!isGMPInt && !isGMPRational && !isString &&
+          !typeName.starts_with("uint") && typeName != "bool" &&
+          !typeName.starts_with("struct")) {
+        isEnum = true;
+        enumTypeName = typeName.str();
+      }
     }
 
     // Get the constant initial value from the attribute
@@ -625,6 +787,12 @@ private:
 
       // Assign the string literal (stored in read-only data section)
       initFunc += "  ctx->" + varName + " = " + stringValue + ";\n";
+    } else if (isEnum) {
+      // For enum types, initialize with the enum constant
+      // The literal should be the label name (e.g., "OK", "ERROR")
+      std::string labelName = sanitizeIdentifier(literal.str());
+      std::string enumConstant = enumTypeName + "_" + labelName;
+      initFunc += "  ctx->" + varName + " = " + enumConstant + ";\n";
     } else if (!words.empty()) {
       // For large bitvectors, initialize each word individually
       for (size_t i = 0; i < words.size(); i++) {

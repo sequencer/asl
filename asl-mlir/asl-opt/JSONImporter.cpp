@@ -500,7 +500,9 @@ struct JSONImporter {
       auto name = obj->getString("name");
       if (!name)
         return makeError("named type missing name");
-      return asl::NamedType::get(&ctx, builder.getStringAttr(*name));
+      // Pass nullptr for resolved_type - it will be resolved during
+      // canonicalization
+      return asl::NamedType::get(&ctx, builder.getStringAttr(*name), nullptr);
     }
 
     if (k == "T_Bits") {

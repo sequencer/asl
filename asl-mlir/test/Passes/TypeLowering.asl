@@ -102,3 +102,20 @@ var String: string;
 // CHECK:   ctx->String_init = "Hello World!";
 // CHECK: }
 var String_init: string = "Hello World!";
+
+// CHECK: typedef enum asl_Status {
+// CHECK:   asl_Status_OK = 0,
+// CHECK:   asl_Status_ERROR = 1,
+// CHECK:   asl_Status_PENDING = 2
+// CHECK: } asl_Status;
+type Status of enumeration {OK, ERROR, PENDING};
+
+// CHECK: static inline void asl_init_status(asl_context* ctx) {
+// CHECK:   ctx->status = asl_Status_OK;
+// CHECK: }
+var status: Status;
+
+// CHECK: static inline void asl_init_status_init(asl_context* ctx) {
+// CHECK:   ctx->status_init = asl_Status_ERROR;
+// CHECK: }
+var status_init: Status = ERROR;

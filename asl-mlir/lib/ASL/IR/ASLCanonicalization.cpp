@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "ASL/ASLOps.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LogicalResult.h"
@@ -125,6 +126,8 @@ struct GlobalStorageDeclConstantFolder
       constantValue = realLit.getValueAttr();
     } else if (auto stringLit = dyn_cast<LiteralStringOp>(definingOp)) {
       constantValue = stringLit.getValueAttr();
+    } else if (auto labelLit = dyn_cast<LiteralLabelOp>(definingOp)) {
+      constantValue = labelLit.getValueAttr();
     } else {
       // Not a literal operation we can fold
       return failure();
@@ -136,6 +139,104 @@ struct GlobalStorageDeclConstantFolder
         constantValue);
 
     return success();
+  }
+};
+
+/// Resolve named types in global storage declarations
+/// This pattern looks up type declarations and populates the resolved_type
+/// parameter of NamedType for better type information during optimization.
+struct GlobalStorageDeclNamedTypeResolver
+    : public OpRewritePattern<GlobalStorageDeclOp> {
+  using OpRewritePattern<GlobalStorageDeclOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(GlobalStorageDeclOp op,
+                                PatternRewriter &rewriter) const override {
+    TypeAttr typeAttr = op.getTypeAttr();
+    auto namedType = dyn_cast<NamedType>(typeAttr.getValue());
+
+    // Only process if the type is a NamedType without a resolved type
+    if (!namedType || namedType.getResolvedType())
+      return failure();
+
+    StringAttr typeName = namedType.getName();
+
+    // Look up the type declaration in the parent module
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    if (!moduleOp)
+      return failure();
+
+    TypeDeclOp typeDeclOp = nullptr;
+    moduleOp.walk([&](TypeDeclOp decl) {
+      if (decl.getIdentifier() == typeName.getValue()) {
+        typeDeclOp = decl;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+
+    // If we found the type declaration, update the NamedType with resolved type
+    if (typeDeclOp) {
+      auto resolvedNamedType = NamedType::get(rewriter.getContext(), typeName,
+                                              typeDeclOp.getTypeAttr());
+
+      // Create a new GlobalStorageDeclOp with the resolved type
+      rewriter.replaceOpWithNewOp<GlobalStorageDeclOp>(
+          op, op.getKeywordAttr(), op.getNameAttr(),
+          TypeAttr::get(resolvedNamedType), op.getInitialValue());
+
+      return success();
+    }
+
+    return failure();
+  }
+};
+
+/// Resolve named types in constant init global storage declarations
+/// This pattern looks up type declarations and populates the resolved_type
+/// parameter of NamedType for better type information during optimization.
+struct ConstantInitGlobalStorageDeclNamedTypeResolver
+    : public OpRewritePattern<ConstantInitGlobalStorageDeclOp> {
+  using OpRewritePattern<ConstantInitGlobalStorageDeclOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ConstantInitGlobalStorageDeclOp op,
+                                PatternRewriter &rewriter) const override {
+    TypeAttr typeAttr = op.getTypeAttr();
+    auto namedType = dyn_cast<NamedType>(typeAttr.getValue());
+
+    // Only process if the type is a NamedType without a resolved type
+    if (!namedType || namedType.getResolvedType())
+      return failure();
+
+    StringAttr typeName = namedType.getName();
+
+    // Look up the type declaration in the parent module
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    if (!moduleOp)
+      return failure();
+
+    TypeDeclOp typeDeclOp = nullptr;
+    moduleOp.walk([&](TypeDeclOp decl) {
+      if (decl.getIdentifier() == typeName.getValue()) {
+        typeDeclOp = decl;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+
+    // If we found the type declaration, update the NamedType with resolved type
+    if (typeDeclOp) {
+      auto resolvedNamedType = NamedType::get(rewriter.getContext(), typeName,
+                                              typeDeclOp.getTypeAttr());
+
+      // Create a new ConstantInitGlobalStorageDeclOp with the resolved type
+      rewriter.replaceOpWithNewOp<ConstantInitGlobalStorageDeclOp>(
+          op, op.getKeywordAttr(), op.getNameAttr(),
+          TypeAttr::get(resolvedNamedType), op.getInitialValueAttr());
+
+      return success();
+    }
+
+    return failure();
   }
 };
 
@@ -179,7 +280,10 @@ void mlir::asl::populateASLCanonicalizationPatterns(
                UnopNotDoubleNegation>(patterns.getContext());
 
   // Global storage declaration patterns
-  patterns.add<GlobalStorageDeclConstantFolder>(patterns.getContext());
+  patterns
+      .add<GlobalStorageDeclConstantFolder, GlobalStorageDeclNamedTypeResolver,
+           ConstantInitGlobalStorageDeclNamedTypeResolver>(
+          patterns.getContext());
 
   // TODO: Add more canonicalization patterns as they are implemented
   // Binary operation patterns:

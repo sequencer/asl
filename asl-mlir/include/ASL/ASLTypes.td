@@ -212,11 +212,14 @@ def ASL_NamedType : ASL_Type<"Named", "named"> {
   let summary = "ASL named type";
   let description = [{
     Represents an ASL named type that references a type alias.
+    Optionally includes a resolved type attribute that can be populated
+    during canonicalization to reference the actual underlying type.
   }];
 
-  let parameters = (ins "StringAttr":$name);
+  let parameters = (ins "StringAttr":$name, 
+                        OptionalParameter<"TypeAttr">:$resolved_type);
 
-  let assemblyFormat = "`<` $name `>`";
+  let assemblyFormat = "`<` $name (`,` $resolved_type^)? `>`";
 }
 
 //===----------------------------------------------------------------------===//

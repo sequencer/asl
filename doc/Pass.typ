@@ -1041,6 +1041,354 @@ Using `const char*` for ASL strings ensures:
 
 For ASL specifications, which primarily use strings for error messages and debugging rather than complex text processing, this representation provides the best balance of simplicity, efficiency, and compatibility with the C ecosystem.
 
+== Enumeration Types <enum_type_lowering>
+
+ASL enumeration types (`!asl.enum<labels>`) represent a finite set of named constants called enumeration literals or labels. These are lowered to C enumerations (`enum`) for type-safe, efficient representation of discrete values.
+
+#table(
+  columns: 3,
+  [ASL Type], [C Type], [Notes],
+  [`!asl.enum<[label1, label2, ...]>`], [`enum { label1, label2, ... }`], [Named enumeration type],
+  [`!asl.label`], [`int` or enum value], [Individual enumeration literal],
+)
+
+=== Enumeration Type Semantics <enum_semantics>
+
+ASL enumeration types have the following characteristics:
+
+- *Named Constants*: Enumeration literals act as global constants that can be compared for equality/inequality
+- *No Ordering*: Unlike many languages, ASL enumerations do NOT support ordering comparisons (`<`, `<=`, etc.)
+- *Type Safety*: Each enumeration literal has the type of the anonymous enumeration that defined it
+- *Array Indexing*: Enumeration literals can be used as indices in enumeration-indexed arrays
+- *Global Namespace*: Enumeration literals exist in the same namespace as other declared identifiers (except subprograms)
+- *Unique Labels*: Each enumeration literal can be declared in at most one enumeration type declaration
+
+=== C Enumeration Type (`enum`) <c_enum_type>
+
+Using C `enum` types provides:
+
+- Compile-time constants with zero runtime overhead
+- Type checking and documentation in the C code
+- Automatic integer values assigned sequentially (0, 1, 2, ...)
+- Integration with C switch statements for pattern matching
+- Standard C compatibility across all compilers
+
+=== Enumeration Type Declaration <enum_declaration>
+
+ASL enumeration types are declared and lowered to C enums:
+
+*ASL enumeration type:*
+```asl
+type TrafficLight of enumeration {GREEN, ORANGE, RED};
+type Direction of enumeration {NORTH, SOUTH, EAST, WEST};
+```
+
+*Lowered to C:*
+```c
+// Named enumeration type
+typedef enum TrafficLight {
+  TrafficLight_GREEN = 0,
+  TrafficLight_ORANGE = 1,
+  TrafficLight_RED = 2
+} TrafficLight;
+
+typedef enum Direction {
+  Direction_NORTH = 0,
+  Direction_SOUTH = 1,
+  Direction_EAST = 2,
+  Direction_WEST = 3
+} Direction;
+```
+
+*Rationale for prefixing:* Enumeration literals in C share a global namespace within their translation unit, so we prefix each literal with the enum type name to avoid collisions and improve code clarity.
+
+=== Anonymous Enumerations <anonymous_enumerations>
+
+ASL only allows enumeration types in type declarations (anonymous enumerations are not permitted). However, the internal representation uses `!asl.label` type for enumeration literals:
+
+*ASL enumeration literal:*
+```asl
+type Color of enumeration {RED, GREEN, BLUE};
+var current_color: Color = RED;
+```
+
+*Lowered to C:*
+```c
+typedef enum Color {
+  Color_RED = 0,
+  Color_GREEN = 1,
+  Color_BLUE = 2
+} Color;
+
+// In context structure
+typedef struct asl_context {
+  Color current_color;
+  // ... other fields
+} asl_context;
+
+// Initialization
+static inline void asl_init_current_color(asl_context* ctx) {
+  ctx->current_color = Color_RED;
+}
+```
+
+=== Enumeration Operations <enum_operations>
+
+ASL enumeration operations are lowered to C comparison operators:
+
+#table(
+  columns: 3,
+  [ASL Operation], [C Operator/Expression], [Notes],
+  [Equality `a == b`], [`a == b`], [Direct enum comparison],
+  [Inequality `a != b`], [`a != b`], [Direct enum comparison],
+  [Assignment `x = label`], [`x = EnumType_label`], [Direct assignment],
+  [Switch/Case], [`switch (x) { case EnumType_label: ... }`], [Pattern matching],
+)
+
+*Note:* Ordering comparisons (`<`, `>`, `<=`, `>=`) are NOT supported in ASL for enumerations and should not be generated in lowered code.
+
+=== Enumeration Literals <enum_literals>
+
+Enumeration literals are represented in ASL IR as `asl.expr.literal.label` operations with `!asl.label` type:
+
+*ASL enumeration literal usage:*
+```asl
+type Status of enumeration {OK, ERROR, PENDING};
+
+func check_status(s: Status) => boolean
+begin
+  return s == OK || s == ERROR;
+end
+```
+
+*Lowered to C:*
+```c
+typedef enum Status {
+  Status_OK = 0,
+  Status_ERROR = 1,
+  Status_PENDING = 2
+} Status;
+
+bool check_status(Status s) {
+  return s == Status_OK || s == Status_ERROR;
+}
+```
+
+=== Enumeration in Pattern Matching <enum_pattern_matching>
+
+ASL case statements with enumeration literals lower to C switch statements:
+
+*ASL pattern matching with enums:*
+```asl
+type TrafficLight of enumeration {GREEN, ORANGE, RED};
+
+func describe_light(light: TrafficLight) => string
+begin
+  case light of
+    when GREEN => return "Go";
+    when ORANGE => return "Caution";
+    when RED => return "Stop";
+  end
+end
+```
+
+*Lowered to C:*
+```c
+typedef enum TrafficLight {
+  TrafficLight_GREEN = 0,
+  TrafficLight_ORANGE = 1,
+  TrafficLight_RED = 2
+} TrafficLight;
+
+const char* describe_light(TrafficLight light) {
+  switch (light) {
+    case TrafficLight_GREEN:
+      return "Go";
+    case TrafficLight_ORANGE:
+      return "Caution";
+    case TrafficLight_RED:
+      return "Stop";
+    default:
+      // Unreachable if all cases covered
+      return "";
+  }
+}
+```
+
+=== Enumeration-Indexed Arrays <enum_indexed_arrays>
+
+ASL supports arrays indexed by enumeration types, which ensures type-safe array access:
+
+*ASL enumeration-indexed array:*
+```asl
+type Coord of enumeration {X, Y, Z};
+var point: array [Coord] of integer;
+
+func set_coordinate(c: Coord, value: integer)
+begin
+  point[c] = value;
+end
+```
+
+*Lowered to C:*
+```c
+typedef enum Coord {
+  Coord_X = 0,
+  Coord_Y = 1,
+  Coord_Z = 2
+} Coord;
+
+// In context structure
+typedef struct asl_context {
+  mpz_t point[3];  // Array size = number of enum values
+  // ... other fields
+} asl_context;
+
+void set_coordinate(asl_context* ctx, Coord c, const mpz_t value) {
+  // Direct array indexing using enum value (which is an integer)
+  mpz_set(ctx->point[c], value);
+}
+
+// Initialization
+static inline void asl_init_point(asl_context* ctx) {
+  for (int i = 0; i < 3; i++) {
+    mpz_init_set_ui(ctx->point[i], 0);
+  }
+}
+
+// Cleanup
+void asl_free(asl_context* ctx) {
+  for (int i = 0; i < 3; i++) {
+    mpz_clear(ctx->point[i]);
+  }
+  // ... other cleanup
+}
+```
+
+=== Enumeration Type Conversion <enum_type_conversion>
+
+When lowering ASL enumeration types, special attention is needed for type conversions:
+
+*Enum to Integer* (explicit conversion):
+```c
+// ASL: let idx: integer = as_int(Color_RED);
+// Lowered to:
+mpz_t idx;
+mpz_init_set_ui(idx, (unsigned long)Color_RED);
+```
+
+*Integer to Enum* (with validation):
+```c
+// ASL may require validation when converting integers to enums
+// Lowered to (with bounds checking):
+bool int_to_color(Color* result, const mpz_t value) {
+  if (mpz_fits_ulong_p(value)) {
+    unsigned long val = mpz_get_ui(value);
+    if (val <= Color_BLUE) {
+      *result = (Color)val;
+      return true;
+    }
+  }
+  return false;  // Invalid conversion
+}
+```
+
+=== Enumeration in Structures <enum_in_structures>
+
+When enumerations appear in structured types, they use the C enum type directly:
+
+*ASL structure with enumeration:*
+```asl
+type Status of enumeration {IDLE, RUNNING, STOPPED};
+
+type SystemState = {
+  status: Status,
+  error_code: integer
+};
+```
+
+*Lowered to C:*
+```c
+typedef enum Status {
+  Status_IDLE = 0,
+  Status_RUNNING = 1,
+  Status_STOPPED = 2
+} Status;
+
+typedef struct SystemState {
+  Status status;
+  mpz_t error_code;
+} SystemState;
+
+void SystemState_init(SystemState* state) {
+  state->status = Status_IDLE;
+  mpz_init_set_ui(state->error_code, 0);
+}
+
+void SystemState_free(SystemState* state) {
+  mpz_clear(state->error_code);
+}
+```
+
+=== Label Type Representation <label_type_representation>
+
+The `!asl.label` type in MLIR IR represents individual enumeration literals. During lowering, these are resolved to their corresponding enum type:
+
+*MLIR IR:*
+```mlir
+%0 = asl.expr.literal.label "RED" : !asl.label
+%1 = asl.expr.var "current_color" : !asl.enum<["RED", "GREEN", "BLUE"]>
+%2 = asl.expr.binop.eq %1, %0 : !asl.enum<...>, !asl.label -> i1
+```
+
+*Lowered to C:*
+```c
+// Label literal resolved to enum constant
+Color label_RED = Color_RED;
+
+// Variable access
+Color current_color = ctx->current_color;
+
+// Comparison
+bool result = (current_color == Color_RED);
+```
+
+=== Enumeration Naming Conventions <enum_naming>
+
+To ensure generated C code is valid and collision-free:
+
+1. *Type Names*: Keep the original ASL type name (e.g., `TrafficLight`)
+2. *Label Prefixing*: Prefix each label with the type name and underscore (e.g., `TrafficLight_GREEN`)
+3. *Sanitization*: Replace invalid C identifier characters with underscores
+4. *Uniqueness*: The prefixing ensures labels from different enum types don't collide
+
+*Example with sanitization:*
+```asl
+type My-Status of enumeration {OK-State, Error-State};
+```
+
+*Lowered to C:*
+```c
+typedef enum My_Status {
+  My_Status_OK_State = 0,
+  My_Status_Error_State = 1
+} My_Status;
+```
+
+=== Rationale for C `enum` Type <enum_rationale>
+
+Using C `enum` types for ASL enumerations ensures:
+
+1. *Type Safety*: C compilers can detect type mismatches at compile time
+2. *Zero Overhead*: Enum constants are compile-time values with no runtime cost
+3. *Readability*: Generated C code is self-documenting with meaningful names
+4. *Debugging*: Debuggers can display enum names instead of raw integers
+5. *Standard Compliance*: C enums are universally supported across all C compilers
+6. *Switch Optimization*: Compilers can optimize switch statements on enums efficiently
+7. *Semantic Preservation*: ASL's lack of ordering is preserved (C doesn't enforce ordering semantics)
+
+The mapping from ASL enumeration types to C enums maintains all semantic properties while providing efficient, type-safe code generation compatible with the entire C ecosystem.
+
 = Global State Management <global_state_management>
 
 Each MLIR module is lowered to C code with a structured approach to managing global state. This design ensures thread safety, clean initialization, and proper resource management.
