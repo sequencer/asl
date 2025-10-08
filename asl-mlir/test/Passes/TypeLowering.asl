@@ -55,3 +55,20 @@ var Int : integer;
 // CHECK: }
 var Int_init : integer = 42;
 
+// CHECK: static inline void asl_init_Real(asl_context* ctx) {
+// CHECK:   mpq_init(ctx->Real);
+// CHECK:   mpq_set_str(ctx->Real, "0", 10);
+// CHECK:   mpq_canonicalize(ctx->Real);
+// CHECK: }
+var Real : real;
+
+// CHECK: static inline void asl_init_RealPi_init(asl_context* ctx) {
+// CHECK:   mpq_init(ctx->RealPi_init);
+// CHECK:   mpq_set_str(ctx->RealPi_init, "157/50", 10);
+// CHECK:   mpq_canonicalize(ctx->RealPi_init);
+// CHECK: }
+var RealPi_init : real = 3.14;
+
+// TODO: real folding
+// var RealMinusOne_init : real = -1.0;
+

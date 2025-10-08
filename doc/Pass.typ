@@ -31,6 +31,235 @@ All integer variables must be initialized with `mpz_init()` and cleaned up with 
 
 *Rationale:* Using GMP for all integers ensures correctness since ASL integers are unbounded and cannot be safely represented by native C integer types like `intmax_t` in the general case. In the future optimizations, if the operation result is bounded and can be inferred to be less than `INT_MAX`, it can be optimized to use native integer type.
 
+== Real Types <real_type_lowering>
+
+ASL real types (`!asl.real`) represent exact rational numbers and are lowered to GMP's `mpq_t` type for arbitrary-precision rational arithmetic. This ensures that ASL's exact arithmetic semantics are preserved in the generated C code.
+
+#table(
+  columns: 3,
+  [ASL Type], [C Type], [Notes],
+  [`!asl.real`], [`mpq_t`], [Arbitrary-precision rational number using GMP],
+)
+
+=== Rational Number Semantics <rational_semantics>
+
+ASL real types differ fundamentally from IEEE 754 floating-point types:
+
+- *Exact Representation*: Real values in ASL represent exact rational numbers (p/q where p and q are integers), not approximations
+- *No Rounding Errors*: Operations on reals maintain exactness; `1/3 + 1/6` yields exactly `1/2`, not a floating-point approximation
+- *Unbounded Precision*: Both numerator and denominator can grow arbitrarily large
+- *Automatic Canonicalization*: Rational values are automatically reduced to lowest terms (e.g., `4/6` becomes `2/3`)
+
+=== GMP Rational Type (`mpq_t`) <mpq_type>
+
+The `mpq_t` type from GMP provides:
+
+- A numerator (`mpz_t`) and denominator (`mpz_t`) pair
+- Automatic canonicalization via `mpq_canonicalize()`
+- Rich arithmetic operations preserving exactness
+- Conversion to/from integers and floating-point (when needed)
+
+=== Initialization and Cleanup <real_init_cleanup>
+
+Real variables require explicit initialization and cleanup:
+
+```c
+mpq_t x, y, result;
+
+// Initialize rationals (sets to 0/1)
+mpq_init(x);
+mpq_init(y);
+mpq_init(result);
+
+// ... use the variables ...
+
+// Clean up
+mpq_clear(x);
+mpq_clear(y);
+mpq_clear(result);
+```
+
+=== Real Type Operations <real_operations>
+
+Common ASL real operations are lowered to GMP rational functions:
+
+#table(
+  columns: 3,
+  [ASL Operation], [GMP Function], [Notes],
+  [Addition `a + b`], [`mpq_add(result, a, b)`], [Exact rational addition],
+  [Subtraction `a - b`], [`mpq_sub(result, a, b)`], [Exact rational subtraction],
+  [Multiplication `a * b`], [`mpq_mul(result, a, b)`], [Exact rational multiplication],
+  [Division `a / b`], [`mpq_div(result, a, b)`], [Exact rational division (b ≠ 0)],
+  [Negation `-a`], [`mpq_neg(result, a)`], [Negates the rational],
+  [Comparison `a < b`], [`mpq_cmp(a, b) < 0`], [Returns -1, 0, or 1],
+  [Equality `a == b`], [`mpq_equal(a, b)`], [Returns non-zero if equal],
+)
+
+=== Creating Rational Constants <real_constants>
+
+Rational constants can be created in several ways:
+
+*From integer literals:*
+```c
+mpq_t quarter;
+mpq_init(quarter);
+mpq_set_si(quarter, 1, 4);  // Creates 1/4
+mpq_canonicalize(quarter);
+```
+
+*From two integers:*
+```c
+mpq_t fraction;
+mpq_init(fraction);
+
+// Set numerator and denominator separately
+mpz_t num, den;
+mpz_init_set_ui(num, 22);
+mpz_init_set_ui(den, 7);
+mpq_set_num(fraction, num);
+mpq_set_den(fraction, den);
+mpq_canonicalize(fraction);
+
+mpz_clear(num);
+mpz_clear(den);
+```
+
+*From a string:*
+```c
+mpq_t pi_approx;
+mpq_init(pi_approx);
+mpq_set_str(pi_approx, "355/113", 10);  // Base 10
+mpq_canonicalize(pi_approx);
+```
+
+=== Conversion Operations <real_conversions>
+
+Converting between reals and other types:
+
+*Real to Integer (truncation/floor):*
+```c
+mpq_t rational;
+mpz_t integer_result;
+
+// ... initialize and set rational ...
+
+mpz_init(integer_result);
+// Floor division: numerator / denominator
+mpz_fdiv_q(integer_result, mpq_numref(rational), mpq_denref(rational));
+```
+
+*Integer to Real:*
+```c
+mpz_t integer_value;
+mpq_t real_result;
+
+// ... initialize and set integer_value ...
+
+mpq_init(real_result);
+mpq_set_z(real_result, integer_value);  // Creates rational with denominator 1
+```
+
+*Real to Double (for output/approximation):*
+```c
+mpq_t rational;
+// ... initialize and set rational ...
+
+double approx = mpq_get_d(rational);
+printf("Approximate value: %f\n", approx);
+```
+
+Note: Converting to floating-point loses the exactness guarantee of rationals.
+
+=== Memory Management Considerations <real_memory>
+
+Rational arithmetic can cause unbounded growth in numerator and denominator sizes:
+
+```c
+// Example: repeated division can create large denominators
+mpq_t x, half;
+mpq_init_set_ui(x, 1, 1);      // x = 1/1
+mpq_init_set_ui(half, 1, 2);   // half = 1/2
+
+for (int i = 0; i < 100; i++) {
+  mpq_mul(x, x, half);  // x = 1/2^100 after loop
+}
+// Denominator grows exponentially!
+
+mpq_clear(x);
+mpq_clear(half);
+```
+
+For long-running computations, consider:
+- Periodic canonicalization (though `mpq` operations do this automatically)
+- Approximate conversion to bounded representations when exactness is no longer needed
+- Careful algorithm design to avoid pathological growth
+
+=== Example: Exact Fraction Arithmetic <real_example>
+
+ASL code with exact rational arithmetic:
+```
+func harmonic_sum(n: integer) => real
+begin
+  var sum: real = 0.0;
+  var i: integer = 1;
+  while i <= n do
+    sum = sum + (1.0 / i);  // Exact: 1/1 + 1/2 + 1/3 + ...
+    i = i + 1;
+  end
+  return sum;
+end
+```
+
+Lowered to C:
+```c
+void harmonic_sum(mpq_t result, const mpz_t n) {
+  mpq_t sum, term, i_rational;
+  mpz_t i;
+  
+  // Initialize
+  mpq_init(sum);              // sum = 0/1
+  mpq_init(term);
+  mpq_init(i_rational);
+  mpz_init_set_ui(i, 1);
+  
+  // While loop: i <= n
+  while (mpz_cmp(i, n) <= 0) {
+    // term = 1 / i (exact rational division)
+    mpq_set_z(i_rational, i);           // Convert i to rational
+    mpq_set_ui(term, 1, 1);             // term = 1/1
+    mpq_div(term, term, i_rational);    // term = 1/i
+    
+    // sum = sum + term (exact rational addition)
+    mpq_add(sum, sum, term);
+    
+    // i = i + 1
+    mpz_add_ui(i, i, 1);
+  }
+  
+  // Return result
+  mpq_set(result, sum);
+  
+  // Cleanup
+  mpq_clear(sum);
+  mpq_clear(term);
+  mpq_clear(i_rational);
+  mpz_clear(i);
+}
+```
+
+The result is exact: for `n=3`, the function returns exactly `11/6`, not a floating-point approximation.
+
+=== Rationale for GMP Rationals <real_rationale>
+
+Using `mpq_t` for ASL reals ensures:
+
+1. *Semantic Fidelity*: ASL's exact arithmetic is preserved
+2. *Correctness*: No accumulation of rounding errors
+3. *Predictability*: Results are deterministic and mathematically precise
+4. *Compliance*: Matches ASL specification requirements
+
+The performance cost is acceptable for specification-level code where correctness is paramount. Future optimizations could analyze when floating-point approximations are safe and substitute `double` for bounded cases.
+
 == Bitvector Types <bits_type_lowering>
 
 ASL bitvector types (`!asl.bits<width, bitfields>`) are lowered to C types based on width:

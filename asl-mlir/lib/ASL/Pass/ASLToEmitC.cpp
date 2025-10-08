@@ -63,13 +63,17 @@ public:
       return convertBitsType(type);
     });
 
-    // Convert ASL integer type to intmax_t
+    // Convert ASL integer type to GMP mpz_t
     addConversion([this](asl::IntType type) -> std::optional<Type> {
       return convertIntType(type);
     });
 
+    // Convert ASL real type to GMP mpq_t
+    addConversion([this](asl::RealType type) -> std::optional<Type> {
+      return convertRealType(type);
+    });
+
     // TODO: Add more ASL type conversions
-    // - !asl.real -> mpq_t
     // - !asl.bool -> i1
     // - !asl.string -> emitc.opaque<"const char*">
   }
@@ -82,6 +86,14 @@ private:
     // All ASL integers are converted to GMP's mpz_t for arbitrary precision
     // This ensures correctness since ASL integers are unbounded
     return emitc::OpaqueType::get(context, "mpz_t");
+  }
+
+  // Convert ASL real type to GMP mpq_t
+  Type convertRealType(asl::RealType type) {
+    // All ASL reals are converted to GMP's mpq_t for exact rational arithmetic
+    // This ensures correctness since ASL reals represent exact rational numbers
+    // (p/q where p and q are integers), not floating-point approximations
+    return emitc::OpaqueType::get(context, "mpq_t");
   }
 
   // Convert ASL bits type to C integer type based on width
@@ -375,10 +387,12 @@ private:
     Type varType = globalVar.getType();
     Type convertedType = typeConverter.convertType(varType);
 
-    // Check if this is a GMP integer type
+    // Check if this is a GMP type
     bool isGMPInt = false;
+    bool isGMPRational = false;
     if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(convertedType)) {
       isGMPInt = (opaqueType.getValue() == "mpz_t");
+      isGMPRational = (opaqueType.getValue() == "mpq_t");
     }
 
     // Get the constant initial value from the attribute
@@ -479,6 +493,44 @@ private:
       // base 10 for decimal integers
       initFunc += "  mpz_init_set_str(ctx->" + varName + ", \"" + decimalValue +
                   "\", 10);\n";
+    } else if (isGMPRational) {
+      // For GMP rational types, use mpq_init and mpq_set_str for initialization
+      // The initial value is stored as a string (e.g., "0", "1/2", "3.14")
+      std::string rationalValue = literal.str();
+
+      // Initialize mpq_t with the rational string value
+      // mpq_set_str(mpq_t rop, const char *str, int base)
+      // The string can be:
+      // - An integer: "42" -> 42/1
+      // - A fraction: "22/7" -> 22/7
+      // - A decimal: "3.14" -> 314/100 (after parsing)
+
+      // For now, we support integer and fraction formats directly
+      // If the value looks like a decimal (contains '.'), we need to convert it
+      if (rationalValue.find('.') != std::string::npos) {
+        // Decimal format - need to convert to fraction
+        // For example: "3.14" should become "314/100"
+        size_t dotPos = rationalValue.find('.');
+        std::string intPart = rationalValue.substr(0, dotPos);
+        std::string fracPart = rationalValue.substr(dotPos + 1);
+
+        // Calculate denominator (10^number_of_decimal_places)
+        uint64_t denominator = 1;
+        for (size_t i = 0; i < fracPart.size(); i++) {
+          denominator *= 10;
+        }
+
+        // Calculate numerator
+        uint64_t numerator = std::stoull(intPart + fracPart);
+
+        rationalValue =
+            std::to_string(numerator) + "/" + std::to_string(denominator);
+      }
+
+      initFunc += "  mpq_init(ctx->" + varName + ");\n";
+      initFunc += "  mpq_set_str(ctx->" + varName + ", \"" + rationalValue +
+                  "\", 10);\n";
+      initFunc += "  mpq_canonicalize(ctx->" + varName + ");\n";
     } else if (!words.empty()) {
       // For large bitvectors, initialize each word individually
       for (size_t i = 0; i < words.size(); i++) {
