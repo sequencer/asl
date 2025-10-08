@@ -1,0 +1,19 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build ASL MLIR",
+			"type": "shell",
+			"command": "ninja",
+			"args": [
+				"-C",
+				"build"
+			],
+			"group": "build",
+			"isBackground": false,
+			"problemMatcher": [
+				"$gcc"
+			]
+		}
+	]
+}
