@@ -82,8 +82,12 @@ public:
       return std::nullopt;
     });
 
+    // Convert ASL string type to C const char*
+    addConversion([this](asl::StringType type) -> std::optional<Type> {
+      return convertStringType(type);
+    });
+
     // TODO: Add more ASL type conversions
-    // - !asl.string -> emitc.opaque<"const char*">
   }
 
 private:
@@ -113,6 +117,20 @@ private:
     // have a finite domain and map directly to C's native boolean type without
     // loss of semantic information
     return emitc::OpaqueType::get(context, "bool");
+  }
+
+  // Convert ASL string type to C const char*
+  Type convertStringType(asl::StringType type) {
+    // ASL string types are converted to C's const char* for immutable strings
+    // This provides:
+    // - Direct compatibility with C standard library string functions
+    // - Minimal memory overhead (just a pointer)
+    // - Natural integration with C I/O and formatting functions
+    // - Read-only semantics enforced by const qualifier
+    // ASL strings consist of printable ASCII characters (decimal 32-126) plus
+    // escape sequences for special characters (newline, tab, backslash,
+    // double-quote)
+    return emitc::OpaqueType::get(context, "const char*");
   }
 
   // Convert ASL bits type to C integer type based on width
@@ -188,6 +206,45 @@ struct ConstantInitGlobalStorageDeclOpLowering
     // TODO: Store global variable metadata for struct generation
     // For now, just erase the op - the pass will handle code generation
     rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// Convert asl.expr.literal.string to emitc.constant
+struct LiteralStringOpLowering
+    : public OpConversionPattern<asl::LiteralStringOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::LiteralStringOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto stringType = llvm::dyn_cast<asl::StringType>(op.getType());
+    if (!stringType)
+      return failure();
+
+    // Get the string literal value
+    StringRef value = op.getValue();
+
+    // Convert the type to const char*
+    Type convertedType = getTypeConverter()->convertType(stringType);
+    if (!convertedType)
+      return failure();
+
+    // Create EmitC constant with the string literal
+    // The value is already in the correct format (quoted string)
+    // EmitC will emit it as: const char* var = "string value";
+    std::string escapedValue = value.str();
+
+    // Ensure the string is properly quoted
+    if (escapedValue.empty() || escapedValue.front() != '"') {
+      escapedValue = "\"" + escapedValue + "\"";
+    }
+
+    auto constantOp = rewriter.create<emitc::ConstantOp>(
+        op.getLoc(), convertedType,
+        emitc::OpaqueAttr::get(rewriter.getContext(), escapedValue));
+
+    rewriter.replaceOp(op, constantOp.getResult());
     return success();
   }
 };
@@ -292,7 +349,8 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
 
     // Add conversion patterns
     patterns.add<ConstantInitGlobalStorageDeclOpLowering,
-                 LiteralBitvectorOpLowering>(typeConverter, context);
+                 LiteralStringOpLowering, LiteralBitvectorOpLowering>(
+        typeConverter, context);
 
     // Collect global variables before conversion for context struct generation
     SmallVector<asl::ConstantInitGlobalStorageDeclOp> globalVars;
@@ -363,6 +421,8 @@ private:
     builder.create<emitc::VerbatimOp>(loc, "#include <stdint.h>");
     // Add stdbool.h for bool type
     builder.create<emitc::VerbatimOp>(loc, "#include <stdbool.h>");
+    // Add string.h for string operations (strcmp, strlen, etc.)
+    builder.create<emitc::VerbatimOp>(loc, "#include <string.h>");
   }
 
   // Generate the context struct typedef
@@ -406,12 +466,14 @@ private:
     Type varType = globalVar.getType();
     Type convertedType = typeConverter.convertType(varType);
 
-    // Check if this is a GMP type
+    // Check if this is a GMP type or string type
     bool isGMPInt = false;
     bool isGMPRational = false;
+    bool isString = false;
     if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(convertedType)) {
       isGMPInt = (opaqueType.getValue() == "mpz_t");
       isGMPRational = (opaqueType.getValue() == "mpq_t");
+      isString = (opaqueType.getValue() == "const char*");
     }
 
     // Get the constant initial value from the attribute
@@ -550,6 +612,19 @@ private:
       initFunc += "  mpq_set_str(ctx->" + varName + ", \"" + rationalValue +
                   "\", 10);\n";
       initFunc += "  mpq_canonicalize(ctx->" + varName + ");\n";
+    } else if (isString) {
+      // For string types, assign the string literal directly
+      // The literal value should already be a properly quoted string
+      std::string stringValue = literal.str();
+
+      // Ensure the string is properly quoted
+      if (stringValue.empty() || stringValue.front() != '"') {
+        // If not quoted, add quotes
+        stringValue = "\"" + stringValue + "\"";
+      }
+
+      // Assign the string literal (stored in read-only data section)
+      initFunc += "  ctx->" + varName + " = " + stringValue + ";\n";
     } else if (!words.empty()) {
       // For large bitvectors, initialize each word individually
       for (size_t i = 0; i < words.size(); i++) {
@@ -632,7 +707,9 @@ private:
           freeFunc += "  mpq_clear(ctx->" + varName + ");\n";
           needsCleanup = true;
         }
-        // TODO: Add cleanup for other dynamically allocated types
+        // Note: const char* (strings) don't need cleanup as they point to
+        // string literals in read-only data sections
+        // TODO: Add cleanup for dynamically allocated strings if needed
       }
     }
 

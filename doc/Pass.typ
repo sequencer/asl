@@ -738,6 +738,309 @@ Using C's `bool` type for ASL booleans ensures:
 
 Unlike integers or rationals which require GMP for correctness, booleans have a finite domain and map directly to C's native boolean type without loss of semantic information.
 
+== String Types <string_type_lowering>
+
+ASL string types (`!asl.string`) represent immutable sequences of characters and are lowered to C's `const char*` type. Strings in ASL are used primarily for error messages, debugging output, and metadata rather than for complex text processing.
+
+#table(
+  columns: 3,
+  [ASL Type], [C Type], [Notes],
+  [`!asl.string`], [`const char*`], [Null-terminated C string, immutable],
+)
+
+=== String Type Semantics <string_semantics>
+
+ASL string types have the following characteristics:
+
+- *Immutability*: Strings are immutable values in ASL; operations create new strings rather than modifying existing ones
+- *Null-Terminated*: Lowered to standard C null-terminated strings for compatibility
+- *ASCII Character Set*: ASL strings consist of printable ASCII characters (decimal 32-126) plus escape sequences for special characters (newline, tab, backslash, double-quote)
+- *Static Allocation*: String literals are typically stored in read-only data sections
+
+=== C String Type (`const char*`) <c_string_type>
+
+Using `const char*` provides:
+
+- Direct compatibility with C standard library string functions
+- Minimal memory overhead (just a pointer)
+- Natural integration with C I/O and formatting functions
+- Read-only semantics enforced by `const` qualifier
+
+=== String Literals <string_literals>
+
+String literals are lowered to C string literals:
+
+*ASL string literal:*
+```asl
+let message: string = "Hello, World!";
+let error_msg: string = "Invalid input value";
+```
+
+*Lowered to C:*
+```c
+const char* message = "Hello, World!";
+const char* error_msg = "Invalid input value";
+```
+
+=== String Operations <string_operations>
+
+Common ASL string operations are lowered to C standard library functions:
+
+#table(
+  columns: 3,
+  [ASL Operation], [C Function/Operator], [Notes],
+  [Concatenation `a ++ b`], [`asprintf()` or buffer], [Allocates new string],
+  [Length `length(s)`], [`strlen(s)`], [Returns string length],
+  [Equality `a == b`], [`strcmp(a, b) == 0`], [Lexicographic comparison],
+  [Substring], [`strncpy()` or pointer arithmetic], [Creates substring],
+  [String to integer], [`strtol()` or GMP parsing], [Conversion with validation],
+)
+
+=== String Concatenation <string_concatenation>
+
+String concatenation requires dynamic memory allocation since C strings are immutable:
+
+*ASL string concatenation:*
+```asl
+func format_error(code: integer, msg: string) => string
+begin
+  return "Error " ++ int_to_string(code) ++ ": " ++ msg;
+end
+```
+
+*Lowered to C:*
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+char* format_error(const mpz_t code, const char* msg) {
+  char* result;
+  char code_str[128];
+  
+  // Convert integer to string
+  gmp_snprintf(code_str, sizeof(code_str), "%Zd", code);
+  
+  // Allocate and format the result string
+  asprintf(&result, "Error %s: %s", code_str, msg);
+  
+  return result;
+}
+
+// Usage requires freeing the allocated string
+char* error = format_error(error_code, "Invalid operation");
+printf("%s\n", error);
+free(error);
+```
+
+=== String Memory Management <string_memory_management>
+
+String memory management follows these patterns:
+
+*String Literals*: No allocation or deallocation needed, stored in read-only data section.
+
+```c
+const char* literal = "This is a constant string";
+// No free() needed for literals
+```
+
+*Dynamically Allocated Strings*: Must be explicitly freed after use.
+
+```c
+char* dynamic_string = format_error(code, msg);
+// ... use dynamic_string ...
+free(dynamic_string);
+```
+
+*String Parameters*: Functions accepting strings use `const char*` for input.
+
+```c
+void process_message(const char* msg) {
+  // Function does not take ownership, no free() here
+  printf("Processing: %s\n", msg);
+}
+```
+
+=== String Comparison <string_comparison>
+
+String comparison operations are lowered to C string comparison functions:
+
+*ASL string comparison:*
+```asl
+func check_command(input: string) => boolean
+begin
+  return input == "START" || input == "STOP";
+end
+```
+
+*Lowered to C:*
+```c
+#include <string.h>
+
+bool check_command(const char* input) {
+  return strcmp(input, "START") == 0 || strcmp(input, "STOP") == 0;
+}
+```
+
+=== String in Structures <string_in_structures>
+
+When strings appear in structures, they are represented as `const char*` fields:
+
+*ASL structure with string:*
+```asl
+type ErrorInfo = {
+  code: integer,
+  message: string,
+  source: string
+};
+```
+
+*Lowered to C:*
+```c
+typedef struct ErrorInfo {
+  mpz_t code;
+  const char* message;
+  const char* source;
+} ErrorInfo;
+
+void ErrorInfo_init(ErrorInfo* info, const mpz_t code, 
+                    const char* message, const char* source) {
+  mpz_init_set(info->code, code);
+  info->message = message;  // Assumes ownership semantics are clear
+  info->source = source;
+}
+
+void ErrorInfo_free(ErrorInfo* info) {
+  mpz_clear(info->code);
+  // Note: Whether to free message/source depends on ownership policy
+  // If ErrorInfo owns the strings:
+  // free((void*)info->message);
+  // free((void*)info->source);
+}
+```
+
+=== String Conversion Functions <string_conversion>
+
+Converting between strings and other types:
+
+*Integer to String:*
+```c
+// Using GMP for arbitrary-precision integers
+char* int_to_string(const mpz_t value) {
+  char* result;
+  gmp_asprintf(&result, "%Zd", value);
+  return result;  // Caller must free
+}
+```
+
+*String to Integer:*
+```c
+// Parse string to GMP integer
+bool string_to_int(mpz_t result, const char* str) {
+  int success = mpz_set_str(result, str, 10);
+  return success == 0;  // 0 indicates success in GMP
+}
+```
+
+*Bitvector to String (for debugging):*
+```c
+char* bits_to_string(uint64_t value, int width) {
+  char* result = malloc(width + 1);
+  for (int i = width - 1; i >= 0; i--) {
+    result[width - 1 - i] = ((value >> i) & 1) ? '1' : '0';
+  }
+  result[width] = '\0';
+  return result;  // Caller must free
+}
+```
+
+=== String Escape Sequences <string_escape_sequences>
+
+ASL string literals support standard escape sequences which map directly to C:
+
+#table(
+  columns: 3,
+  [ASL Escape], [C Escape], [Meaning],
+  [`\n`], [`\n`], [Newline],
+  [`\r`], [`\r`], [Carriage return],
+  [`\t`], [`\t`], [Tab],
+  [`\\`], [`\\`], [Backslash],
+  [`\"`], [`\"`], [Double quote],
+  [`\'`], [`\'`], [Single quote],
+)
+
+*ASL with escape sequences:*
+```asl
+let multiline: string = "First line\nSecond line\n";
+let quoted: string = "He said \"Hello\"";
+```
+
+*Lowered to C:*
+```c
+const char* multiline = "First line\nSecond line\n";
+const char* quoted = "He said \"Hello\"";
+```
+
+=== Helper Functions for String Operations <string_helper_functions>
+
+Common string helper functions that may be generated:
+
+```c
+// Safe string concatenation with allocation
+char* asl_string_concat(const char* a, const char* b) {
+  if (!a) a = "";
+  if (!b) b = "";
+  
+  size_t len_a = strlen(a);
+  size_t len_b = strlen(b);
+  char* result = malloc(len_a + len_b + 1);
+  
+  if (result) {
+    memcpy(result, a, len_a);
+    memcpy(result + len_a, b, len_b);
+    result[len_a + len_b] = '\0';
+  }
+  
+  return result;
+}
+
+// Safe string duplication
+char* asl_string_dup(const char* str) {
+  if (!str) return NULL;
+  return strdup(str);
+}
+
+// String substring extraction
+char* asl_string_substr(const char* str, size_t start, size_t length) {
+  if (!str) return NULL;
+  
+  size_t str_len = strlen(str);
+  if (start >= str_len) return strdup("");
+  
+  size_t actual_len = (start + length > str_len) ? 
+                      (str_len - start) : length;
+  
+  char* result = malloc(actual_len + 1);
+  if (result) {
+    memcpy(result, str + start, actual_len);
+    result[actual_len] = '\0';
+  }
+  
+  return result;
+}
+```
+
+=== Rationale for C `const char*` Type <string_rationale>
+
+Using `const char*` for ASL strings ensures:
+
+1. *Standard Compatibility*: Direct use of C standard library string functions
+2. *Memory Efficiency*: String literals stored in read-only data sections without duplication
+3. *Interoperability*: Easy integration with existing C APIs and libraries
+4. *Simplicity*: No complex string object management needed
+5. *Performance*: Minimal overhead for passing strings between functions
+
+For ASL specifications, which primarily use strings for error messages and debugging rather than complex text processing, this representation provides the best balance of simplicity, efficiency, and compatibility with the C ecosystem.
+
 = Global State Management <global_state_management>
 
 Each MLIR module is lowered to C code with a structured approach to managing global state. This design ensures thread safety, clean initialization, and proper resource management.

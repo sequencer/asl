@@ -92,3 +92,13 @@ var Bool : boolean;
 // CHECK:   ctx->BoolT_init = true;
 // CHECK: }
 var BoolT_init : boolean = TRUE;
+
+// CHECK: static inline void asl_init_String(asl_context* ctx) {
+// CHECK:   ctx->String = "";
+// CHECK: }
+var String: string;
+
+// CHECK: static inline void asl_init_String_init(asl_context* ctx) {
+// CHECK:   ctx->String_init = "Hello World!";
+// CHECK: }
+var String_init: string = "Hello World!";
