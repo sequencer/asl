@@ -96,6 +96,52 @@ struct UnopNotDoubleNegation : public OpRewritePattern<UnopNotOp> {
 // Global Storage Declaration Canonicalization Patterns
 //===----------------------------------------------------------------------===//
 
+/// Helper function to check if a value is a constant and extract its string
+/// representation This function handles both primitive literals and recursive
+/// tuples.
+static std::optional<std::string> getConstantStringValue(Value value,
+                                                         MLIRContext *ctx) {
+  Operation *definingOp = value.getDefiningOp();
+  if (!definingOp)
+    return std::nullopt;
+
+  if (auto bitvectorLit = dyn_cast<LiteralBitvectorOp>(definingOp)) {
+    return bitvectorLit.getValue().str();
+  } else if (auto intLit = dyn_cast<LiteralIntOp>(definingOp)) {
+    return intLit.getValue().str();
+  } else if (auto boolLit = dyn_cast<LiteralBoolOp>(definingOp)) {
+    return boolLit.getValue() ? "true" : "false";
+  } else if (auto realLit = dyn_cast<LiteralRealOp>(definingOp)) {
+    return realLit.getValue().str();
+  } else if (auto stringLit = dyn_cast<LiteralStringOp>(definingOp)) {
+    return stringLit.getValue().str();
+  } else if (auto labelLit = dyn_cast<LiteralLabelOp>(definingOp)) {
+    return labelLit.getValue().str();
+  } else if (auto tupleOp = dyn_cast<TupleOp>(definingOp)) {
+    // Recursively handle nested tuples
+    SmallVector<std::string> elementValues;
+    for (Value element : tupleOp.getElements()) {
+      auto constStr = getConstantStringValue(element, ctx);
+      if (!constStr)
+        return std::nullopt; // If any element is not constant, tuple is not
+                             // constant
+      elementValues.push_back(*constStr);
+    }
+
+    // Serialize tuple as "(element0, element1, ...)"
+    std::string tupleStr = "(";
+    for (size_t i = 0; i < elementValues.size(); ++i) {
+      if (i > 0)
+        tupleStr += ", ";
+      tupleStr += elementValues[i];
+    }
+    tupleStr += ")";
+    return tupleStr;
+  }
+
+  return std::nullopt;
+}
+
 /// Fold constant literal initial values into ConstantInitGlobalStorageDeclOp
 /// This pattern matches GlobalStorageDeclOp with a literal operation as the
 /// initial value and folds the literal into an attribute.
@@ -106,32 +152,14 @@ struct GlobalStorageDeclConstantFolder
   LogicalResult matchAndRewrite(GlobalStorageDeclOp op,
                                 PatternRewriter &rewriter) const override {
     Value initialValue = op.getInitialValue();
-    Operation *definingOp = initialValue.getDefiningOp();
 
-    if (!definingOp)
+    // Try to extract constant value using the helper function
+    auto constStr = getConstantStringValue(initialValue, rewriter.getContext());
+    if (!constStr)
       return failure();
 
-    // Extract the constant value from various literal operations
-    StringAttr constantValue;
-
-    if (auto bitvectorLit = dyn_cast<LiteralBitvectorOp>(definingOp)) {
-      constantValue = bitvectorLit.getValueAttr();
-    } else if (auto intLit = dyn_cast<LiteralIntOp>(definingOp)) {
-      constantValue = intLit.getValueAttr();
-    } else if (auto boolLit = dyn_cast<LiteralBoolOp>(definingOp)) {
-      // Convert BoolAttr to StringAttr
-      bool boolValue = boolLit.getValue();
-      constantValue = rewriter.getStringAttr(boolValue ? "true" : "false");
-    } else if (auto realLit = dyn_cast<LiteralRealOp>(definingOp)) {
-      constantValue = realLit.getValueAttr();
-    } else if (auto stringLit = dyn_cast<LiteralStringOp>(definingOp)) {
-      constantValue = stringLit.getValueAttr();
-    } else if (auto labelLit = dyn_cast<LiteralLabelOp>(definingOp)) {
-      constantValue = labelLit.getValueAttr();
-    } else {
-      // Not a literal operation we can fold
-      return failure();
-    }
+    // Create StringAttr from the constant string
+    StringAttr constantValue = rewriter.getStringAttr(*constStr);
 
     // Create the new ConstantInitGlobalStorageDeclOp with the folded constant
     rewriter.replaceOpWithNewOp<ConstantInitGlobalStorageDeclOp>(

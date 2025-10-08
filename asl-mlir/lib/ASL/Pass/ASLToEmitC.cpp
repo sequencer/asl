@@ -117,6 +117,11 @@ public:
       return convertLabelType(type);
     });
 
+    // Convert ASL tuple type to C struct
+    addConversion([this](asl::TupleType type) -> std::optional<Type> {
+      return convertTupleType(type);
+    });
+
     // TODO: Add more ASL type conversions
   }
 
@@ -229,6 +234,12 @@ private:
         std::string enumTypeName =
             "asl_" + sanitizeIdentifier(type.getName().str());
         return emitc::OpaqueType::get(context, enumTypeName);
+      } else if (auto tupleType =
+                     llvm::dyn_cast<asl::TupleType>(resolvedType)) {
+        // Use the name for the tuple type (struct typedef) with asl_ prefix
+        std::string tupleTypeName =
+            "asl_" + sanitizeIdentifier(type.getName().str());
+        return emitc::OpaqueType::get(context, tupleTypeName);
       }
       // Recursively convert the resolved type
       return convertType(resolvedType);
@@ -244,6 +255,74 @@ private:
     // Label literals will be resolved to specific enum values
     // The type itself is just an int
     return emitc::OpaqueType::get(context, "int");
+  }
+
+  // Convert ASL tuple type to C struct
+  Type convertTupleType(asl::TupleType type) {
+    // ASL tuple types are lowered to C structures (struct) to maintain type
+    // information and enable efficient element access.
+    //
+    // Each tuple element is stored as a struct field named "itemN" where N is
+    // the zero-based index. This provides:
+    // - Type safety with distinct field types
+    // - Efficient memory layout with sequential element storage
+    // - Natural mapping to C's type system
+    // - Compatibility with C calling conventions
+    // - Debugger support for inspecting tuple contents
+    //
+    // Tuple types must contain at least two elements (single-element tuples
+    // are not valid in ASL).
+
+    auto types = type.getTypes();
+    if (types.size() < 2) {
+      mlir::emitError(UnknownLoc::get(context))
+          << "tuple must contain at least two elements";
+      return Type();
+    }
+
+    // Build the struct type string: "struct { type0 item0; type1 item1; ... }"
+    std::string structType = "struct { ";
+
+    for (size_t i = 0; i < types.size(); ++i) {
+      if (i > 0)
+        structType += " ";
+
+      // Get the type attribute and extract the type
+      auto typeAttr = llvm::dyn_cast<TypeAttr>(types[i]);
+      if (!typeAttr) {
+        mlir::emitError(UnknownLoc::get(context))
+            << "tuple element " << i << " is not a type attribute";
+        return Type();
+      }
+
+      Type elementType = typeAttr.getValue();
+
+      // Recursively convert the element type
+      Type convertedElementType = convertType(elementType);
+      if (!convertedElementType) {
+        mlir::emitError(UnknownLoc::get(context))
+            << "failed to convert tuple element type " << i;
+        return Type();
+      }
+
+      // Get the C type string
+      std::string cType;
+      if (auto opaqueType =
+              llvm::dyn_cast<emitc::OpaqueType>(convertedElementType)) {
+        cType = opaqueType.getValue().str();
+      } else {
+        mlir::emitError(UnknownLoc::get(context))
+            << "converted tuple element type " << i << " is not an opaque type";
+        return Type();
+      }
+
+      // Add field: "type itemN;"
+      structType += cType + " item" + std::to_string(i) + ";";
+    }
+
+    structType += " }";
+
+    return emitc::OpaqueType::get(context, structType);
   }
 };
 
@@ -416,6 +495,87 @@ struct TypeDeclOpLowering : public OpConversionPattern<asl::TypeDeclOp> {
   }
 };
 
+// Convert asl.expr.tuple operation to EmitC struct initialization
+struct TupleOpLowering : public OpConversionPattern<asl::TupleOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::TupleOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Get the tuple type and convert it
+    auto tupleType = llvm::dyn_cast<asl::TupleType>(op.getType());
+    if (!tupleType)
+      return failure();
+
+    Type convertedType = getTypeConverter()->convertType(tupleType);
+    if (!convertedType)
+      return failure();
+
+    // Get converted element operands
+    auto elements = adaptor.getElements();
+    if (elements.size() != tupleType.getTypes().size())
+      return failure();
+
+    // Create a variable to hold the tuple
+    auto varOp = rewriter.create<emitc::VariableOp>(op.getLoc(), convertedType,
+                                                    emitc::OpaqueAttr());
+
+    // For each element, initialize the corresponding field
+    // For GMP types we need proper initialization, for other types direct
+    // assignment
+    for (size_t i = 0; i < elements.size(); ++i) {
+      std::string fieldName = "item" + std::to_string(i);
+
+      // Get element type - tupleType.getTypes() returns ArrayAttr
+      auto typeAttr = mlir::cast<TypeAttr>(tupleType.getTypes()[i]);
+      Type elementType = typeAttr.getValue();
+      Type convertedElementType = getTypeConverter()->convertType(elementType);
+
+      // Build field access expression: "&(tuple.itemN)"
+      // We use emitc.apply to create the field member access
+      SmallVector<Attribute> argsAttr;
+      argsAttr.push_back(rewriter.getStringAttr(fieldName));
+
+      auto fieldAccessOp = rewriter.create<emitc::CallOpaqueOp>(
+          op.getLoc(), TypeRange{convertedElementType}, ".", varOp.getResult(),
+          nullptr, rewriter.getArrayAttr(argsAttr));
+
+      // For GMP types (mpz_t, mpq_t), we need to call init and set functions
+      if (auto opaqueType =
+              llvm::dyn_cast<emitc::OpaqueType>(convertedElementType)) {
+        StringRef typeName = opaqueType.getValue();
+
+        if (typeName == "mpz_t") {
+          // For mpz_t: mpz_init_set(tuple.itemN, value)
+          SmallVector<Value, 2> initSetArgs = {fieldAccessOp.getResult(0),
+                                               elements[i]};
+          rewriter.create<emitc::CallOpaqueOp>(op.getLoc(), TypeRange{},
+                                               "mpz_init_set", initSetArgs,
+                                               nullptr, nullptr);
+        } else if (typeName == "mpq_t") {
+          // For mpq_t: mpq_init(tuple.itemN); mpq_set(tuple.itemN, value)
+          SmallVector<Value, 1> initArgs = {fieldAccessOp.getResult(0)};
+          rewriter.create<emitc::CallOpaqueOp>(
+              op.getLoc(), TypeRange{}, "mpq_init", initArgs, nullptr, nullptr);
+          SmallVector<Value, 2> setArgs = {fieldAccessOp.getResult(0),
+                                           elements[i]};
+          rewriter.create<emitc::CallOpaqueOp>(
+              op.getLoc(), TypeRange{}, "mpq_set", setArgs, nullptr, nullptr);
+        } else {
+          // For simple types (bool, int, const char*, etc.): direct assignment
+          SmallVector<Value, 2> assignArgs = {fieldAccessOp.getResult(0),
+                                              elements[i]};
+          rewriter.create<emitc::CallOpaqueOp>(op.getLoc(), TypeRange{}, "=",
+                                               assignArgs, nullptr, nullptr);
+        }
+      }
+    }
+
+    rewriter.replaceOp(op, varOp.getResult());
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Pass Implementation
 //===----------------------------------------------------------------------===//
@@ -457,8 +617,8 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
     // Add conversion patterns
     patterns.add<ConstantInitGlobalStorageDeclOpLowering,
                  LiteralStringOpLowering, LiteralBitvectorOpLowering,
-                 LiteralLabelOpLowering, TypeDeclOpLowering>(typeConverter,
-                                                             context);
+                 LiteralLabelOpLowering, TypeDeclOpLowering, TupleOpLowering>(
+        typeConverter, context);
 
     // Collect type declarations before conversion for typedef generation
     SmallVector<asl::TypeDeclOp> typeDecls;
@@ -505,9 +665,10 @@ private:
     // 0. Generate necessary includes
     generateIncludes(builder, loc);
 
-    // 1. Generate enum typedefs for type declarations
+    // 1. Generate typedefs for type declarations (enums and tuples)
     for (auto typeDecl : typeDecls) {
       generateEnumTypedef(builder, loc, typeDecl);
+      generateTupleTypedef(builder, loc, typeDecl, typeConverter);
     }
 
     // 2. Generate typedef struct definition using emitc.verbatim
@@ -517,7 +678,7 @@ private:
     // 2. Generate per-variable inline init functions
     for (auto globalVar : globalVars) {
       generatePerVariableInit(builder, loc, moduleName, contextTypeName,
-                              globalVar, typeConverter);
+                              globalVar, typeConverter, module);
     }
 
     // 3. Generate main init function
@@ -563,6 +724,57 @@ private:
     builder.create<emitc::VerbatimOp>(loc, enumDef);
   }
 
+  // Generate tuple typedef from type declaration
+  void generateTupleTypedef(OpBuilder &builder, Location loc,
+                            asl::TypeDeclOp typeDecl,
+                            ASLToEmitCTypeConverter &typeConverter) {
+    // Only generate typedef for tuple types
+    Type declType = typeDecl.getType();
+    auto tupleType = llvm::dyn_cast<asl::TupleType>(declType);
+    if (!tupleType)
+      return;
+
+    // Get the type name with asl_ prefix to avoid collisions
+    std::string typeName =
+        "asl_" + sanitizeIdentifier(typeDecl.getIdentifier());
+
+    // Generate struct typedef
+    std::string structDef = "typedef struct " + typeName + " {\n";
+
+    // Add struct fields
+    auto types = tupleType.getTypes();
+    for (size_t i = 0; i < types.size(); ++i) {
+      auto typeAttr = mlir::cast<TypeAttr>(types[i]);
+      Type elemType = typeAttr.getValue();
+
+      // Convert the element type
+      Type convertedElemType = typeConverter.convertType(elemType);
+      if (!convertedElemType) {
+        mlir::emitError(loc) << "failed to convert tuple element type " << i;
+        return;
+      }
+
+      // Get the C type string
+      std::string cType;
+      if (auto opaqueType =
+              llvm::dyn_cast<emitc::OpaqueType>(convertedElemType)) {
+        cType = opaqueType.getValue().str();
+      } else {
+        mlir::emitError(loc)
+            << "converted tuple element type " << i << " is not an opaque type";
+        return;
+      }
+
+      // Add field: "  type itemN;\n"
+      structDef += "  " + cType + " item" + std::to_string(i) + ";\n";
+    }
+
+    structDef += "} " + typeName + ";";
+
+    // Create verbatim op for struct typedef
+    builder.create<emitc::VerbatimOp>(loc, structDef);
+  }
+
   // Generate necessary C includes
   void generateIncludes(OpBuilder &builder, Location loc) {
     // Add gmp.h for GMP arbitrary-precision integers (mpz_t) and rationals
@@ -605,11 +817,164 @@ private:
     builder.create<emitc::VerbatimOp>(loc, structDef);
   }
 
+  // Helper function to recursively generate initialization code for a field
+  void generateFieldInit(std::string &initFunc, const std::string &fieldPath,
+                         Type aslType, const std::string &value,
+                         ASLToEmitCTypeConverter &typeConverter,
+                         ModuleOp module) {
+    // Resolve named types first - keep resolving until we get to the actual
+    // type
+    Type resolvedType = aslType;
+    while (auto namedType = llvm::dyn_cast<asl::NamedType>(resolvedType)) {
+      if (namedType.getResolvedType()) {
+        resolvedType = namedType.getResolvedType().getValue();
+      } else {
+        // Named type without resolved type - look up the type declaration in
+        // the module
+        StringRef typeName = namedType.getName();
+        bool found = false;
+
+        // Search for type declaration in the module
+        module.walk([&](asl::TypeDeclOp typeDecl) {
+          if (typeDecl.getIdentifier() == typeName) {
+            // Found the type declaration, get its type
+            TypeAttr typeAttr = typeDecl.getTypeAttr();
+            resolvedType = typeAttr.getValue();
+            found = true;
+            return WalkResult::interrupt();
+          }
+          return WalkResult::advance();
+        });
+
+        if (!found) {
+          // Cannot find type declaration - generate error
+          initFunc += "  // ERROR: Cannot find type declaration for '" +
+                      typeName.str() + "'\n";
+          initFunc += "  " + fieldPath + " = " + value + "; // INVALID\n";
+          return;
+        }
+      }
+    }
+
+    // Check if this is a tuple type - handle recursively
+    if (auto tupleType = llvm::dyn_cast<asl::TupleType>(resolvedType)) {
+      ArrayAttr types = tupleType.getTypes();
+
+      // Parse tuple value: "(val1, val2, ...)"
+      SmallVector<std::string> tupleValues;
+      if (value.size() >= 2 && value.front() == '(' && value.back() == ')') {
+        std::string content = value.substr(1, value.size() - 2);
+
+        int parenDepth = 0;
+        size_t start = 0;
+        for (size_t i = 0; i <= content.size(); ++i) {
+          if (i < content.size()) {
+            if (content[i] == '(')
+              parenDepth++;
+            else if (content[i] == ')')
+              parenDepth--;
+          }
+
+          if ((i == content.size()) || (content[i] == ',' && parenDepth == 0)) {
+            std::string val = content.substr(start, i - start);
+            // Trim whitespace
+            size_t first = val.find_first_not_of(" \t\n\r");
+            size_t last = val.find_last_not_of(" \t\n\r");
+            if (first != std::string::npos) {
+              val = val.substr(first, last - first + 1);
+            } else {
+              val = "";
+            }
+            tupleValues.push_back(val);
+            start = i + 1;
+          }
+        }
+      }
+
+      // Recursively initialize each field
+      for (size_t i = 0; i < types.size(); ++i) {
+        auto typeAttr = mlir::cast<TypeAttr>(types[i]);
+        Type elemType = typeAttr.getValue();
+        std::string fieldName = "item" + std::to_string(i);
+        std::string elemValue = (i < tupleValues.size()) ? tupleValues[i] : "";
+
+        // Recursive call for this field
+        generateFieldInit(initFunc, fieldPath + "." + fieldName, elemType,
+                          elemValue, typeConverter, module);
+      }
+      return;
+    }
+
+    // For non-tuple types, generate the appropriate initialization
+    Type convertedType = typeConverter.convertType(resolvedType);
+
+    if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(convertedType)) {
+      StringRef typeName = opaqueType.getValue();
+
+      if (typeName == "mpz_t") {
+        // Initialize GMP integer
+        std::string val = value.empty() ? "0" : value;
+        initFunc +=
+            "  mpz_init_set_str(" + fieldPath + ", \"" + val + "\", 10);\n";
+      } else if (typeName == "mpq_t") {
+        // Initialize GMP rational
+        std::string val = value.empty() ? "0" : value;
+        initFunc += "  mpq_init(" + fieldPath + ");\n";
+        initFunc += "  mpq_set_str(" + fieldPath + ", \"" + val + "\", 10);\n";
+        initFunc += "  mpq_canonicalize(" + fieldPath + ");\n";
+      } else if (typeName == "bool") {
+        // Initialize boolean
+        std::string boolValue = "false";
+        if (value == "true" || value == "TRUE" || value == "1") {
+          boolValue = "true";
+        }
+        initFunc += "  " + fieldPath + " = " + boolValue + ";\n";
+      } else if (typeName == "const char*") {
+        // Initialize string
+        if (value.empty()) {
+          initFunc += "  " + fieldPath + " = \"\";\n";
+        } else {
+          std::string strValue = value;
+          if (strValue.front() != '"') {
+            strValue = "\"" + strValue + "\"";
+          }
+          initFunc += "  " + fieldPath + " = " + strValue + ";\n";
+        }
+      } else if (typeName.starts_with("uint") || typeName.starts_with("int")) {
+        // Initialize integer types
+        std::string val = value.empty() ? "0" : value;
+        initFunc += "  " + fieldPath + " = " + val + ";\n";
+      } else {
+        // For other types (enums, etc.)
+        std::string val = value.empty() ? "0" : value;
+        initFunc += "  " + fieldPath + " = " + val + ";\n";
+      }
+    } else if (auto intType = llvm::dyn_cast<IntegerType>(convertedType)) {
+      // Handle MLIR integer types (i1, i8, i16, i32, i64)
+      if (intType.getWidth() == 1) {
+        // i1 is bool
+        std::string boolValue = "false";
+        if (value == "true" || value == "TRUE" || value == "1") {
+          boolValue = "true";
+        }
+        initFunc += "  " + fieldPath + " = " + boolValue + ";\n";
+      } else {
+        std::string val = value.empty() ? "0" : value;
+        initFunc += "  " + fieldPath + " = " + val + ";\n";
+      }
+    } else {
+      // Fallback
+      std::string val = value.empty() ? "0" : value;
+      initFunc += "  " + fieldPath + " = " + val + ";\n";
+    }
+  }
+
   // Generate per-variable inline init function
   void generatePerVariableInit(OpBuilder &builder, Location loc,
                                StringRef moduleName, StringRef contextTypeName,
                                asl::ConstantInitGlobalStorageDeclOp globalVar,
-                               ASLToEmitCTypeConverter &typeConverter) {
+                               ASLToEmitCTypeConverter &typeConverter,
+                               ModuleOp module) {
     std::string varName = sanitizeIdentifier(globalVar.getName());
     std::string initFuncName = moduleName.str() + "_init_" + varName;
 
@@ -617,22 +982,38 @@ private:
     Type varType = globalVar.getType();
     Type convertedType = typeConverter.convertType(varType);
 
-    // Check if this is a GMP type, string type, or enum type
+    // Check if this is a GMP type, string type, enum type, or tuple type
     bool isGMPInt = false;
     bool isGMPRational = false;
     bool isString = false;
     bool isEnum = false;
+    bool isTuple = false;
     std::string enumTypeName;
+
+    // First, check the ASL type to see if it's a tuple (including named types
+    // that resolve to tuples)
+    Type resolvedVarType = varType;
+    if (auto namedType = llvm::dyn_cast<asl::NamedType>(varType)) {
+      if (namedType.getResolvedType()) {
+        resolvedVarType = namedType.getResolvedType().getValue();
+      }
+    }
+    isTuple = llvm::isa<asl::TupleType>(resolvedVarType);
 
     if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(convertedType)) {
       StringRef typeName = opaqueType.getValue();
       isGMPInt = (typeName == "mpz_t");
       isGMPRational = (typeName == "mpq_t");
       isString = (typeName == "const char*");
+      // Also check if converted type is an anonymous struct (for tuples without
+      // names)
+      if (!isTuple) {
+        isTuple = typeName.starts_with("struct {");
+      }
       // Check if it's an enum type (not one of the standard types)
-      if (!isGMPInt && !isGMPRational && !isString &&
+      if (!isGMPInt && !isGMPRational && !isString && !isTuple &&
           !typeName.starts_with("uint") && typeName != "bool" &&
-          !typeName.starts_with("struct")) {
+          !typeName.starts_with("asl_")) {
         isEnum = true;
         enumTypeName = typeName.str();
       }
@@ -793,6 +1174,11 @@ private:
       std::string labelName = sanitizeIdentifier(literal.str());
       std::string enumConstant = enumTypeName + "_" + labelName;
       initFunc += "  ctx->" + varName + " = " + enumConstant + ";\n";
+    } else if (isTuple) {
+      // For tuple types, use the recursive helper function
+      std::string fieldPath = "ctx->" + varName;
+      generateFieldInit(initFunc, fieldPath, varType, literal.str(),
+                        typeConverter, module);
     } else if (!words.empty()) {
       // For large bitvectors, initialize each word individually
       for (size_t i = 0; i < words.size(); i++) {

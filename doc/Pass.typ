@@ -1301,9 +1301,9 @@ When enumerations appear in structured types, they use the C enum type directly:
 ```asl
 type Status of enumeration {IDLE, RUNNING, STOPPED};
 
-type SystemState = {
-  status: Status,
-  error_code: integer
+type SystemState of record {
+  status: Status;
+  error_code: integer;
 };
 ```
 
@@ -1388,6 +1388,533 @@ Using C `enum` types for ASL enumerations ensures:
 7. *Semantic Preservation*: ASL's lack of ordering is preserved (C doesn't enforce ordering semantics)
 
 The mapping from ASL enumeration types to C enums maintains all semantic properties while providing efficient, type-safe code generation compatible with the entire C ecosystem.
+
+== Tuple Types <tuple_type_lowering>
+
+ASL tuple types (`!asl.tuple<types>`) represent fixed-size heterogeneous collections of values. Tuple values are immutable in ASL, meaning once created, the individual elements cannot be modified. Tuples are lowered to C structures (`struct`) to maintain type information and enable efficient element access.
+
+#table(
+  columns: 3,
+  [ASL Type], [C Type], [Notes],
+  [`!asl.tuple<[type1, type2, ...]>`], [`struct { type1 item0; type2 item1; ... }`], [Anonymous struct with indexed fields],
+)
+
+=== Tuple Type Semantics <tuple_semantics>
+
+ASL tuple types have the following characteristics:
+
+- *Heterogeneous Elements*: Each element can have a different type
+- *Fixed Length*: Tuple length (number of elements) is determined at compile time and cannot change
+- *Immutability*: Tuple values cannot be modified after creation; assignment creates a new tuple
+- *Zero-Based Indexing*: Elements are accessed via `.item0`, `.item1`, `.item2`, etc.
+- *Minimum Length*: Tuples must contain at least two elements (single-element parenthesized expressions are not tuples)
+- *Value Semantics*: Tuples are passed by value unless explicitly passed by reference
+
+=== C Structure Type (`struct`) <c_struct_type>
+
+Using C `struct` types for tuples provides:
+
+- Type safety with distinct field types
+- Efficient memory layout with sequential element storage
+- Natural mapping to C's type system
+- Compatibility with C calling conventions
+- Debugger support for inspecting tuple contents
+
+=== Tuple Type Declaration <tuple_declaration>
+
+ASL tuple types are lowered to anonymous or named C structures:
+
+*ASL tuple type:*
+```asl
+type Point of (integer, integer);
+type Status of (boolean, string, integer);
+```
+
+*Lowered to C:*
+```c
+// For tuple type (integer, integer)
+typedef struct Point {
+  mpz_t item0;  // First element: integer
+  mpz_t item1;  // Second element: integer
+} Point;
+
+// For tuple type (boolean, string, integer)
+typedef struct Status {
+  bool item0;        // First element: boolean
+  const char* item1; // Second element: string
+  mpz_t item2;       // Third element: integer
+} Status;
+
+// Initialization function for Point
+static inline void Point_init(Point* tuple, const mpz_t x, const mpz_t y) {
+  mpz_init_set(tuple->item0, x);
+  mpz_init_set(tuple->item1, y);
+}
+
+// Cleanup function for Point
+static inline void Point_free(Point* tuple) {
+  mpz_clear(tuple->item0);
+  mpz_clear(tuple->item1);
+}
+
+// Initialization function for Status
+static inline void Status_init(Status* tuple, bool ok, const char* msg, const mpz_t code) {
+  tuple->item0 = ok;
+  tuple->item1 = msg;  // Assumes ownership semantics are clear
+  mpz_init_set(tuple->item2, code);
+}
+
+// Cleanup function for Status
+static inline void Status_free(Status* tuple) {
+  // Free string if owned
+  // free((void*)tuple->item1);
+  mpz_clear(tuple->item2);
+}
+```
+
+=== Anonymous Tuples <anonymous_tuples>
+
+For anonymous tuple types used in temporary expressions or return values:
+
+*ASL anonymous tuple:*
+```asl
+func get_bounds() => (integer, integer)
+begin
+  return (0, 100);
+end
+```
+
+*Lowered to C:*
+```c
+// Anonymous tuple type for (integer, integer)
+typedef struct tuple_int_int {
+  mpz_t item0;
+  mpz_t item1;
+} tuple_int_int;
+
+// Helper to initialize anonymous tuple
+static inline void tuple_int_int_init(tuple_int_int* tuple) {
+  mpz_init(tuple->item0);
+  mpz_init(tuple->item1);
+}
+
+// Helper to cleanup anonymous tuple
+static inline void tuple_int_int_free(tuple_int_int* tuple) {
+  mpz_clear(tuple->item0);
+  mpz_clear(tuple->item1);
+}
+
+// Function returning a tuple
+void get_bounds(tuple_int_int* result) {
+  // Initialize result tuple
+  tuple_int_int_init(result);
+  
+  // Set values: (0, 100)
+  mpz_set_ui(result->item0, 0);
+  mpz_set_ui(result->item1, 100);
+}
+
+// Usage
+tuple_int_int bounds;
+get_bounds(&bounds);
+// Use bounds.item0 and bounds.item1
+tuple_int_int_free(&bounds);
+```
+
+*Rationale for naming:* Anonymous tuple type names are generated based on element types to ensure uniqueness and enable type reuse across the module.
+
+=== Tuple Construction <tuple_construction>
+
+Tuple construction creates a new tuple value with specified elements:
+
+*ASL tuple construction:*
+```asl
+var point: (integer, integer) = (3, 4);
+var status: (boolean, string) = (TRUE, "OK");
+```
+
+*Lowered to C:*
+```c
+// Tuple type definitions
+typedef struct tuple_int_int {
+  mpz_t item0;
+  mpz_t item1;
+} tuple_int_int;
+
+typedef struct tuple_bool_string {
+  bool item0;
+  const char* item1;
+} tuple_bool_string;
+
+// Construction
+tuple_int_int point;
+mpz_init_set_ui(point.item0, 3);
+mpz_init_set_ui(point.item1, 4);
+
+tuple_bool_string status;
+status.item0 = true;
+status.item1 = "OK";
+
+// Cleanup
+mpz_clear(point.item0);
+mpz_clear(point.item1);
+// No cleanup needed for status (literal string)
+```
+
+=== Tuple Element Access <tuple_element_access>
+
+Tuple elements are accessed using the `.itemN` notation in C:
+
+*ASL tuple element access:*
+```asl
+var point: (integer, integer) = (3, 4);
+var x: integer = point.item0;
+var y: integer = point.item1;
+```
+
+*Lowered to C:*
+```c
+typedef struct tuple_int_int {
+  mpz_t item0;
+  mpz_t item1;
+} tuple_int_int;
+
+tuple_int_int point;
+mpz_init_set_ui(point.item0, 3);
+mpz_init_set_ui(point.item1, 4);
+
+// Access elements
+mpz_t x, y;
+mpz_init_set(x, point.item0);
+mpz_init_set(y, point.item1);
+
+// Cleanup
+mpz_clear(point.item0);
+mpz_clear(point.item1);
+mpz_clear(x);
+mpz_clear(y);
+```
+
+=== Tuple Assignment <tuple_assignment>
+
+ASL tuple immutability means assignment creates a new tuple value:
+
+*ASL tuple assignment:*
+```asl
+var location: (integer, integer) = (0, 0);
+location = (10, 20);  // Replaces entire tuple
+```
+
+*Lowered to C:*
+```c
+typedef struct tuple_int_int {
+  mpz_t item0;
+  mpz_t item1;
+} tuple_int_int;
+
+// In context structure
+typedef struct asl_context {
+  tuple_int_int location;
+  // ... other fields
+} asl_context;
+
+// Initialization
+static inline void asl_init_location(asl_context* ctx) {
+  mpz_init_set_ui(ctx->location.item0, 0);
+  mpz_init_set_ui(ctx->location.item1, 0);
+}
+
+// Assignment: location = (10, 20)
+// Clear old values and set new values
+mpz_set_ui(ctx->location.item0, 10);
+mpz_set_ui(ctx->location.item1, 20);
+
+// Cleanup
+void asl_free(asl_context* ctx) {
+  mpz_clear(ctx->location.item0);
+  mpz_clear(ctx->location.item1);
+  // ... other cleanup
+}
+```
+
+=== Nested Tuples <nested_tuples>
+
+Tuples can contain other tuples as elements:
+
+*ASL nested tuple:*
+```asl
+type Rect of ((integer, integer), (integer, integer));
+var rectangle: Rect = ((0, 0), (100, 100));
+```
+
+*Lowered to C:*
+```c
+// Element tuple type
+typedef struct tuple_int_int {
+  mpz_t item0;
+  mpz_t item1;
+} tuple_int_int;
+
+// Nested tuple type
+typedef struct Rect {
+  tuple_int_int item0;  // Top-left corner
+  tuple_int_int item1;  // Bottom-right corner
+} Rect;
+
+// Initialization
+static inline void Rect_init(Rect* rect,
+                               const tuple_int_int* top_left,
+                               const tuple_int_int* bottom_right) {
+  // Initialize nested tuples
+  mpz_init_set(rect->item0.item0, top_left->item0);
+  mpz_init_set(rect->item0.item1, top_left->item1);
+  mpz_init_set(rect->item1.item0, bottom_right->item0);
+  mpz_init_set(rect->item1.item1, bottom_right->item1);
+}
+
+// Cleanup
+static inline void Rect_free(Rect* rect) {
+  mpz_clear(rect->item0.item0);
+  mpz_clear(rect->item0.item1);
+  mpz_clear(rect->item1.item0);
+  mpz_clear(rect->item1.item1);
+}
+
+// Usage
+Rect rectangle;
+tuple_int_int top_left, bottom_right;
+
+// Initialize components
+mpz_init_set_ui(top_left.item0, 0);
+mpz_init_set_ui(top_left.item1, 0);
+mpz_init_set_ui(bottom_right.item0, 100);
+mpz_init_set_ui(bottom_right.item1, 100);
+
+// Create rectangle
+Rect_init(&rectangle, &top_left, &bottom_right);
+
+// Access nested element: rectangle.item0.item0 (top-left x)
+mpz_t tlx;
+mpz_init_set(tlx, rectangle.item0.item0);
+
+// Cleanup
+Rect_free(&rectangle);
+mpz_clear(top_left.item0);
+mpz_clear(top_left.item1);
+mpz_clear(bottom_right.item0);
+mpz_clear(bottom_right.item1);
+mpz_clear(tlx);
+```
+
+=== Tuples in Function Signatures <tuples_in_functions>
+
+Functions can accept tuple parameters and return tuple values:
+
+*ASL function with tuple parameter and return:*
+```asl
+func swap(pair: (integer, integer)) => (integer, integer)
+begin
+  return (pair.item1, pair.item0);
+end
+```
+
+*Lowered to C:*
+```c
+typedef struct tuple_int_int {
+  mpz_t item0;
+  mpz_t item1;
+} tuple_int_int;
+
+// Function takes tuple by pointer, returns via out-parameter
+void swap(tuple_int_int* result, const tuple_int_int* pair) {
+  // Initialize result
+  mpz_init_set(result->item0, pair->item1);  // Swap
+  mpz_init_set(result->item1, pair->item0);
+}
+
+// Usage
+tuple_int_int input, output;
+
+// Initialize input: (3, 4)
+mpz_init_set_ui(input.item0, 3);
+mpz_init_set_ui(input.item1, 4);
+
+// Call swap
+swap(&output, &input);
+
+// output now contains (4, 3)
+
+// Cleanup
+mpz_clear(input.item0);
+mpz_clear(input.item1);
+mpz_clear(output.item0);
+mpz_clear(output.item1);
+```
+
+*Rationale for out-parameter:* Functions return tuples via out-parameters rather than by value to avoid expensive copying of large structures and enable proper resource management for GMP types.
+
+=== Tuples with Mixed Types <mixed_type_tuples>
+
+Tuples can contain elements of any ASL type:
+
+*ASL tuple with mixed types:*
+```asl
+type Result of (boolean, bits(32), string, integer);
+
+func process() => Result
+begin
+  return (TRUE, Zeros{32}, "Success", 42);
+end
+```
+
+*Lowered to C:*
+```c
+typedef struct Result {
+  bool item0;        // boolean
+  uint32_t item1;    // bits(32)
+  const char* item2; // string
+  mpz_t item3;       // integer
+} Result;
+
+// Initialization
+static inline void Result_init(Result* tuple) {
+  tuple->item0 = false;
+  tuple->item1 = 0;
+  tuple->item2 = "";
+  mpz_init(tuple->item3);
+}
+
+// Cleanup
+static inline void Result_free(Result* tuple) {
+  // String cleanup depends on ownership
+  mpz_clear(tuple->item3);
+}
+
+// Function implementation
+void process(Result* result) {
+  result->item0 = true;
+  result->item1 = 0;  // Zeros{32}
+  result->item2 = "Success";
+  mpz_init_set_ui(result->item3, 42);
+}
+
+// Usage
+Result res;
+Result_init(&res);
+process(&res);
+
+// Access elements
+if (res.item0) {
+  printf("Status: %s, Code: ", res.item2);
+  mpz_out_str(stdout, 10, res.item3);
+  printf("\n");
+}
+
+Result_free(&res);
+```
+
+=== Tuple Comparison <tuple_comparison>
+
+Tuple equality comparison compares all elements:
+
+*ASL tuple comparison:*
+```asl
+func points_equal(p1: (integer, integer), p2: (integer, integer)) => boolean
+begin
+  return p1 == p2;
+end
+```
+
+*Lowered to C:*
+```c
+typedef struct tuple_int_int {
+  mpz_t item0;
+  mpz_t item1;
+} tuple_int_int;
+
+bool points_equal(const tuple_int_int* p1, const tuple_int_int* p2) {
+  // Compare each element
+  bool item0_equal = (mpz_cmp(p1->item0, p2->item0) == 0);
+  bool item1_equal = (mpz_cmp(p1->item1, p2->item1) == 0);
+  
+  return item0_equal && item1_equal;
+}
+```
+
+=== Tuple Type Naming Conventions <tuple_naming>
+
+To ensure generated C code is valid and collision-free:
+
+1. *Named Tuples*: Use the ASL type name directly (e.g., `Point`, `Status`)
+2. *Anonymous Tuples*: Generate names based on element types (e.g., `tuple_int_int`, `tuple_bool_string_int`)
+3. *Sanitization*: Replace invalid C identifier characters with underscores
+4. *Element Fields*: Always use `item0`, `item1`, `item2`, etc. for consistency
+
+*Example naming:*
+```asl
+type Named = (integer, integer);           // struct Named
+let anon: (boolean, string) = ...;         // struct tuple_bool_string
+let complex: (bits(8), real, integer) = ...;  // struct tuple_bits8_real_int
+```
+
+=== Memory Layout and Alignment <tuple_memory_layout>
+
+C structures provide natural memory layout for tuples:
+
+```c
+typedef struct tuple_example {
+  bool item0;        // 1 byte
+  // Padding: 7 bytes (for alignment)
+  uint64_t item1;    // 8 bytes
+  mpz_t item2;       // GMP structure (typically 16-24 bytes)
+} tuple_example;
+
+// Compiler handles alignment automatically
+```
+
+The C compiler ensures proper alignment for each field, potentially adding padding between elements. This is transparent to the generated code.
+
+=== Helper Functions for Tuple Operations <tuple_helper_functions>
+
+Common helper functions generated for tuple types:
+
+```c
+// Deep copy (for tuples containing GMP types)
+static inline void tuple_int_int_copy(tuple_int_int* dest, const tuple_int_int* src) {
+  mpz_init_set(dest->item0, src->item0);
+  mpz_init_set(dest->item1, src->item1);
+}
+
+// Equality comparison
+static inline bool tuple_int_int_equal(const tuple_int_int* a, const tuple_int_int* b) {
+  return mpz_cmp(a->item0, b->item0) == 0 && mpz_cmp(a->item1, b->item1) == 0;
+}
+
+// String representation (for debugging)
+static inline char* tuple_int_int_to_string(const tuple_int_int* tuple) {
+  char* item0_str = mpz_get_str(NULL, 10, tuple->item0);
+  char* item1_str = mpz_get_str(NULL, 10, tuple->item1);
+  char* result;
+  asprintf(&result, "(%s, %s)", item0_str, item1_str);
+  free(item0_str);
+  free(item1_str);
+  return result;  // Caller must free
+}
+```
+
+=== Rationale for C `struct` Type <tuple_rationale>
+
+Using C `struct` types for ASL tuples ensures:
+
+1. *Type Safety*: Each element has its own type, checked at compile time
+2. *Efficient Access*: Direct field access with zero overhead
+3. *Memory Efficiency*: Contiguous memory layout with compiler-managed alignment
+4. *Natural Mapping*: ASL's tuple semantics align with C struct semantics
+5. *Debugger Support*: Debuggers can display tuple contents with field names
+6. *Standard Compliance*: C structs are universally supported across all C compilers
+7. *Immutability Preservation*: While C structs are mutable, the generated code respects ASL's immutability by creating new tuples for assignments
+
+The mapping from ASL tuple types to C structs provides an efficient, type-safe representation that integrates seamlessly with the C type system while preserving ASL's semantic properties.
 
 = Global State Management <global_state_management>
 
