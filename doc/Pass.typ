@@ -17,20 +17,19 @@ The ASL to EmitC lowering pass transforms high-level ASL operations into EmitC o
 
 == Integer Types <int_type_lowering>
 
-ASL integer types (`!asl.int`) are lowered based on their constraint kind:
+ASL integer types (`!asl.int`) are lowered to GMP's `mpz_t` type for arbitrary-precision arithmetic. All integer operations use GMP functions to ensure correctness regardless of value magnitude:
 
 #table(
   columns: 3,
   [ASL Type], [C Type], [Notes],
-  [`!asl.int<unconstrained>`], [`intmax_t`], [Uses largest available integer type],
-  [`!asl.int<constrained<exact>>`], [`const intmax_t`], [Compile-time constant when possible],
-  [`!asl.int<constrained<range>>`], [`intmax_t`], [Sized based on range, optional checker on write],
+  [`!asl.int<unconstrained>`], [`mpz_t`], [Arbitrary-precision integer using GMP],
+  [`!asl.int<constrained<exact>>`], [`mpz_t`], [Arbitrary-precision integer, may be compile-time constant],
+  [`!asl.int<constrained<range>>`], [`mpz_t`], [Arbitrary-precision integer with optional range checking],
 )
-Constants are emitted using `emitc.constant` operations.
 
-*TODO:* Ideally, int should be lowered with GMP calls since they are not proved to be less than `intmax_t`. Here are two choices:
-- Adding range constraints indicate compiler that integer is small can can safefuly expressed with `intmax_t`, otherwise using GMP for possibility of large number.
-- Adding globally lowering pass to lower all integer to gmp for correctness.
+All integer variables must be initialized with `mpz_init()` and cleaned up with `mpz_clear()`. Constants are created using GMP functions like `mpz_set_si()` for small values or `mpz_set_str()` for large values.
+
+*Rationale:* Using GMP for all integers ensures correctness since ASL integers are unbounded and cannot be safely represented by native C integer types like `intmax_t` in the general case. In the future optimizations, if the operation result is bounded and can be inferred to be less than `INT_MAX`, it can be optimized to use native integer type.
 
 == Bitvector Types <bits_type_lowering>
 
@@ -470,8 +469,8 @@ end
 
 Lowered to C (EmitC):
 ```c
-intmax_t square(intmax_t x) {
-  return x * x;
+void square(mpz_t* result, const mpz_t x) {
+  mpz_mul(*result, x, x);
 }
 ```
 
@@ -544,10 +543,16 @@ typedef struct asl_global_state {
   uint64_t register_file[32];
 } asl_global_state_t;
 
-// Constant (not in state struct)
-static const intmax_t ZERO_REGISTER = 0;
+// Constant (not in state struct) - using GMP for consistency
+// use asl_ as prefix to avoid collision 
+static mpz_t asl_ZERO_REGISTER;
 
-// Initialization function
+// Module initialization function (called once at program start)
+void asl_module_init(void) {
+  mpz_init_set_ui(asl_ZERO_REGISTER, 0);
+}
+
+// State initialization function (called for each context instance)
 void asl_global_state_init(asl_global_state_t* state) {
   for (int i = 0; i < 32; i++) {
     state->register_file[i] = 0ULL;
@@ -555,27 +560,43 @@ void asl_global_state_init(asl_global_state_t* state) {
 }
 
 // Functions with state parameter
-uint64_t read_register(asl_global_state_t* state, intmax_t idx) {
-  if (idx == ZERO_REGISTER) {
-    return 0ULL;
+void read_register(asl_global_state_t* state, uint64_t idx, mpz_t* result) {
+  if (idx == 0) {  // ZERO_REGISTER comparison
+    mpz_set_ui(*result, 0);
   } else {
-    return state->register_file[idx];
+    // Read from register file (assuming idx is valid)
+    mpz_set_ui(*result, state->register_file[idx]);
   }
 }
 
-void write_register(asl_global_state_t* state, intmax_t idx, uint64_t value) {
-  if (idx != ZERO_REGISTER) {
-    state->register_file[idx] = value;
+void write_register(asl_global_state_t* state, uint64_t idx, const mpz_t value) {
+  if (idx != 0) {  // ZERO_REGISTER is read-only
+    // Convert mpz_t to uint64_t and write to register file
+    state->register_file[idx] = mpz_get_ui(value);
   }
 }
 
 // Usage example
 int main() {
+  // Initialize module-level constants
+  asl_module_init();
+  
   asl_global_state_t cpu_state;
   asl_global_state_init(&cpu_state);
   
-  write_register(&cpu_state, 5, 0x1234567890ABCDEFULL);
-  uint64_t value = read_register(&cpu_state, 5);
+  // Use mpz_t for register values
+  mpz_t reg_value, read_value;
+  mpz_init_set_ui(reg_value, 0x1234567890ABCDEFULL);
+  mpz_init(read_value);
+  
+  // Write to register 5
+  write_register(&cpu_state, 5, reg_value);
+  
+  // Read from register 5
+  read_register(&cpu_state, 5, read_value);
+  
+  mpz_clear(reg_value);
+  mpz_clear(read_value);
   
   return 0;
 }
@@ -638,26 +659,35 @@ Lowered to C using GMP:
 ```c
 #include <gmp.h>
 
-void compute_fraction(mpq_t result, intmax_t a, intmax_t b) {
-  mpq_set_si(result, a, (unsigned long)b);
+void compute_fraction(mpq_t result, const mpz_t a, const mpz_t b) {
+  mpq_set_z(result, a);
+  mpz_t temp_denom;
+  mpz_init_set(temp_denom, b);
+  mpq_set_den(result, temp_denom);
+  mpz_clear(temp_denom);
   mpq_canonicalize(result);
 }
 
-intmax_t test_real(void) {
+void test_real(mpz_t* result) {
   mpq_t x, y, z, ten, temp;
+  mpz_t one, three, six, ten_int;
   
-  // Initialize all rationals
+  // Initialize all rationals and integers
   mpq_init(x);
   mpq_init(y);
   mpq_init(z);
   mpq_init(ten);
   mpq_init(temp);
+  mpz_init_set_ui(one, 1);
+  mpz_init_set_ui(three, 3);
+  mpz_init_set_ui(six, 6);
+  mpz_init_set_ui(ten_int, 10);
   
   // Compute x = 1/3
-  compute_fraction(x, 1, 3);
+  compute_fraction(x, one, three);
   
   // Compute y = 1/6
-  compute_fraction(y, 1, 6);
+  compute_fraction(y, one, six);
   
   // Compute z = x + y = 1/2
   mpq_add(z, x, y);
@@ -666,8 +696,8 @@ intmax_t test_real(void) {
   mpq_set_si(ten, 10, 1);
   mpq_mul(temp, z, ten);
   
-  // Convert to integer
-  intmax_t result = rational_floor(temp);
+  // Convert to integer (floor division)
+  mpz_fdiv_q(*result, mpq_numref(temp), mpq_denref(temp));
   
   // Cleanup
   mpq_clear(x);
@@ -675,8 +705,12 @@ intmax_t test_real(void) {
   mpq_clear(z);
   mpq_clear(ten);
   mpq_clear(temp);
+  mpz_clear(one);
+  mpz_clear(three);
+  mpz_clear(six);
+  mpz_clear(ten_int);
   
-  return result;  // Returns 5
+  // result now contains 5
 }
 ```
 
@@ -697,8 +731,8 @@ gcc asl_generated.c $(pkg-config --cflags --libs gmp) -o program
 
 The generated C code includes appropriate headers:
 ```c
-#include <gmp.h>      // For GMP rational arithmetic
-#include <stdint.h>   // For intmax_t
+#include <gmp.h>      // For GMP arbitrary-precision integers (mpz_t) and rationals (mpq_t)
+#include <stdint.h>   // For fixed-width integer types (bitvectors)
 #include <stdbool.h>  // For bool
 ```
 
@@ -764,7 +798,7 @@ typedef struct {
 
 typedef struct {
   const char* constraint;
-  intmax_t value;
+  mpz_t value;
 } asl_exception_constraint_error_t;
 
 // Example user-defined exception structure
@@ -814,7 +848,7 @@ asl_throw_exception(state, ASL_EXCEPTION_UNPREDICTABLE, exc_data);
 asl_exception_constraint_error_t* exc_data = 
   malloc(sizeof(asl_exception_constraint_error_t));
 exc_data->constraint = "Value out of range";
-exc_data->value = value;
+mpz_init_set(exc_data->value, value);
 asl_throw_exception(state, ASL_EXCEPTION_CONSTRAINT_ERROR, exc_data);
 ```
 
@@ -847,6 +881,8 @@ if (setjmp(exc_ctx.jump_buffer) == 0) {
         (asl_exception_constraint_error_t*)exc_ctx.exception_data;
       // Handle constraint error
       handle_constraint_error(state, data);
+      // Cleanup mpz_t in exception data
+      mpz_clear(data->value);
       break;
     }
     default:
@@ -1077,8 +1113,8 @@ enum asl_exception_type {
 
 typedef struct {
   const char* field_name;
-  intmax_t expected;
-  intmax_t actual;
+  mpz_t expected;
+  mpz_t actual;
 } asl_exception_validation_error_t;
 
 typedef struct asl_exception_context {
@@ -1109,29 +1145,34 @@ static inline void asl_throw_exception(asl_global_state_t* state,
 
 // Function implementations
 void validate_range(asl_global_state_t* state, const char* name, 
-                    intmax_t value, intmax_t min, intmax_t max) {
-  if (value < min || value > max) {
+                    const mpz_t value, const mpz_t min, const mpz_t max) {
+  if (mpz_cmp(value, min) < 0 || mpz_cmp(value, max) > 0) {
     asl_exception_validation_error_t* exc = 
       malloc(sizeof(asl_exception_validation_error_t));
     exc->field_name = name;
-    exc->expected = max;
-    exc->actual = value;
+    mpz_init_set(exc->expected, max);
+    mpz_init_set(exc->actual, value);
     asl_throw_exception(state, ASL_EXCEPTION_VALIDATION_ERROR, exc);
   }
 }
 
-intmax_t process_value(asl_global_state_t* state, intmax_t value) {
+void process_value(mpz_t* result, asl_global_state_t* state, const mpz_t value) {
   // Setup exception context
   asl_exception_context_t exc_ctx = {0};
   exc_ctx.prev_context = state->current_exception_context;
   state->current_exception_context = &exc_ctx;
   
-  intmax_t result = 0;
+  mpz_set_ui(*result, 0);
   
   if (setjmp(exc_ctx.jump_buffer) == 0) {
     // Try block
-    validate_range(state, "input", value, 0, 100);
-    result = value * 2;
+    mpz_t min, max;
+    mpz_init_set_ui(min, 0);
+    mpz_init_set_ui(max, 100);
+    validate_range(state, "input", value, min, max);
+    mpz_mul_ui(*result, value, 2);
+    mpz_clear(min);
+    mpz_clear(max);
   } else {
     // Exception was thrown
     if (exc_ctx.exception_type == ASL_EXCEPTION_VALIDATION_ERROR) {
@@ -1140,11 +1181,13 @@ intmax_t process_value(asl_global_state_t* state, intmax_t value) {
         (asl_exception_validation_error_t*)exc_ctx.exception_data;
       
       printf("Validation failed for %s\n", ve->field_name);
-      printf("Expected <= %jd, got %jd\n", ve->expected, ve->actual);
+      gmp_printf("Expected <= %Zd, got %Zd\n", ve->expected, ve->actual);
       
+      mpz_clear(ve->expected);
+      mpz_clear(ve->actual);
       free(ve);
       exc_ctx.exception_data = NULL;
-      result = -1;
+      mpz_set_si(*result, -1);
     } else {
       // Re-throw
       state->current_exception_context = exc_ctx.prev_context;
@@ -1156,7 +1199,7 @@ intmax_t process_value(asl_global_state_t* state, intmax_t value) {
   
   // Restore context
   state->current_exception_context = exc_ctx.prev_context;
-  return result;
+  // result is already set via output parameter
 }
 ```
 
@@ -1220,30 +1263,34 @@ typedef struct {
 
 // ... (exception context and state definitions as before) ...
 
-intmax_t inner_function(asl_global_state_t* state, intmax_t x) {
-  if (x < 0) {
+void inner_function(asl_global_state_t* state, mpz_t* result, const mpz_t x) {
+  if (mpz_cmp_si(x, 0) < 0) {
     asl_exception_inner_error_t* exc = 
       malloc(sizeof(asl_exception_inner_error_t));
-    exc->code = x;
+    exc->code = mpz_get_si(x);  // Convert mpz_t to intmax_t for exception code
     asl_throw_exception(state, ASL_EXCEPTION_INNER_ERROR, exc);
   }
-  return x * 2;
+  mpz_mul_ui(*result, x, 2);
 }
 
-intmax_t outer_function(asl_global_state_t* state, intmax_t x) {
+void outer_function(asl_global_state_t* state, mpz_t* result, const mpz_t x) {
   asl_exception_context_t exc_ctx = {0};
   exc_ctx.prev_context = state->current_exception_context;
   state->current_exception_context = &exc_ctx;
   
-  intmax_t result = 0;
+  mpz_set_ui(*result, 0);
   
   if (setjmp(exc_ctx.jump_buffer) == 0) {
     // Try block
-    intmax_t y = inner_function(state, x);
-    if (y > 100) {
+    mpz_t y;
+    mpz_init(y);
+    inner_function(state, &y, x);
+    if (mpz_cmp_ui(y, 100) > 0) {
+      mpz_clear(y);
       asl_throw_exception(state, ASL_EXCEPTION_OUTER_ERROR, NULL);
     }
-    result = y;
+    mpz_set(*result, y);
+    mpz_clear(y);
   } else {
     // Exception was thrown
     if (exc_ctx.exception_type == ASL_EXCEPTION_INNER_ERROR) {
@@ -1252,7 +1299,7 @@ intmax_t outer_function(asl_global_state_t* state, intmax_t x) {
         (asl_exception_inner_error_t*)exc_ctx.exception_data;
       printf("Inner error with code: %jd\n", ie->code);
       free(ie);
-      result = 0;
+      mpz_set_ui(*result, 0);
     } else {
       // Re-throw (not caught here)
       state->current_exception_context = exc_ctx.prev_context;
@@ -1263,29 +1310,29 @@ intmax_t outer_function(asl_global_state_t* state, intmax_t x) {
   }
   
   state->current_exception_context = exc_ctx.prev_context;
-  return result;
+  // result is already set via output parameter
 }
 
-intmax_t main_function(asl_global_state_t* state, intmax_t x) {
+void main_function(asl_global_state_t* state, mpz_t* result, const mpz_t x) {
   asl_exception_context_t exc_ctx = {0};
   exc_ctx.prev_context = state->current_exception_context;
   state->current_exception_context = &exc_ctx;
   
-  intmax_t result = 0;
+  mpz_set_ui(*result, 0);
   
   if (setjmp(exc_ctx.jump_buffer) == 0) {
     // Try block
-    result = outer_function(state, x);
+    outer_function(state, result, x);
   } else {
     // Exception was thrown
     if (exc_ctx.exception_type == ASL_EXCEPTION_OUTER_ERROR) {
       // Catch OuterError
       printf("Outer error caught\n");
-      result = -1;
+      mpz_set_si(*result, -1);
     } else {
       // Otherwise clause
       printf("Unknown error\n");
-      result = -2;
+      mpz_set_si(*result, -2);
     }
     
     if (exc_ctx.exception_data) {
@@ -1294,7 +1341,7 @@ intmax_t main_function(asl_global_state_t* state, intmax_t x) {
   }
   
   state->current_exception_context = exc_ctx.prev_context;
-  return result;
+  // result is already set via output parameter
 }
 ```
 

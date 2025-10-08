@@ -44,3 +44,14 @@ var Bits33_init : bits(33) = '101010101010101010101010101010101';
 // CHECK:   ctx->Bits65_init.words[1] = 1ULL;
 // CHECK: }
 var Bits65_init : bits(65) = '10101010101010101010101010101010101010101010101010101010101010101';
+
+// CHECK: static inline void asl_init_Int(asl_context* ctx) {
+// CHECK:   mpz_init_set_str(ctx->Int, "0", 10);
+// CHECK: }
+var Int : integer;
+
+// CHECK: static inline void asl_init_Int_init(asl_context* ctx) {
+// CHECK:   mpz_init_set_str(ctx->Int_init, "42", 10);
+// CHECK: }
+var Int_init : integer = 42;
+

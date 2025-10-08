@@ -63,8 +63,12 @@ public:
       return convertBitsType(type);
     });
 
+    // Convert ASL integer type to intmax_t
+    addConversion([this](asl::IntType type) -> std::optional<Type> {
+      return convertIntType(type);
+    });
+
     // TODO: Add more ASL type conversions
-    // - !asl.int -> intmax_t (or emitc.opaque<"intmax_t">)
     // - !asl.real -> mpq_t
     // - !asl.bool -> i1
     // - !asl.string -> emitc.opaque<"const char*">
@@ -72,6 +76,13 @@ public:
 
 private:
   MLIRContext *context;
+
+  // Convert ASL integer type to GMP mpz_t
+  Type convertIntType(asl::IntType type) {
+    // All ASL integers are converted to GMP's mpz_t for arbitrary precision
+    // This ensures correctness since ASL integers are unbounded
+    return emitc::OpaqueType::get(context, "mpz_t");
+  }
 
   // Convert ASL bits type to C integer type based on width
   Type convertBitsType(asl::BitsType type) {
@@ -308,13 +319,19 @@ private:
                              globalVars);
 
     // 4. Generate free function
-    generateFreeFunction(builder, loc, moduleName, contextTypeName, globalVars);
+    generateFreeFunction(builder, loc, moduleName, contextTypeName, globalVars,
+                         typeConverter);
   }
 
   // Generate necessary C includes
   void generateIncludes(OpBuilder &builder, Location loc) {
-    // Add stdint.h for uint8_t, uint16_t, uint32_t, uint64_t types
+    // Add gmp.h for GMP arbitrary-precision integers (mpz_t) and rationals
+    // (mpq_t)
+    builder.create<emitc::VerbatimOp>(loc, "#include <gmp.h>");
+    // Add stdint.h for uint8_t, uint16_t, uint32_t, uint64_t types (bitvectors)
     builder.create<emitc::VerbatimOp>(loc, "#include <stdint.h>");
+    // Add stdbool.h for bool type
+    builder.create<emitc::VerbatimOp>(loc, "#include <stdbool.h>");
   }
 
   // Generate the context struct typedef
@@ -357,6 +374,12 @@ private:
     // Get type information
     Type varType = globalVar.getType();
     Type convertedType = typeConverter.convertType(varType);
+
+    // Check if this is a GMP integer type
+    bool isGMPInt = false;
+    if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(convertedType)) {
+      isGMPInt = (opaqueType.getValue() == "mpz_t");
+    }
 
     // Get the constant initial value from the attribute
     StringRef literal = globalVar.getInitialValue();
@@ -433,7 +456,30 @@ private:
     std::string initFunc = "static inline void " + initFuncName + "(" +
                            contextTypeName.str() + "* ctx) {\n";
 
-    if (!words.empty()) {
+    if (isGMPInt) {
+      // For GMP integer types, use mpz_init_set_str for initialization
+      // The initial value is stored as a decimal string (e.g., "0", "42",
+      // "12345") Use mpz_init_set_str to handle arbitrary-precision integers
+      std::string decimalValue = literal.str();
+
+      // Remove quotes if present (shouldn't be for integer literals)
+      if (decimalValue.size() >= 2 && decimalValue.front() == '\'' &&
+          decimalValue.back() == '\'') {
+        // This is a bitvector literal being used for an integer - convert it
+        StringRef bits = literal.drop_front().drop_back();
+        uint64_t value = 0;
+        for (char c : bits) {
+          value = value * 2 + (c == '1' ? 1 : 0);
+        }
+        decimalValue = std::to_string(value);
+      }
+
+      // Initialize mpz_t with the decimal string value
+      // mpz_init_set_str(mpz_t rop, const char *str, int base)
+      // base 10 for decimal integers
+      initFunc += "  mpz_init_set_str(ctx->" + varName + ", \"" + decimalValue +
+                  "\", 10);\n";
+    } else if (!words.empty()) {
       // For large bitvectors, initialize each word individually
       for (size_t i = 0; i < words.size(); i++) {
         initFunc += "  ctx->" + varName + ".words[" + std::to_string(i) +
@@ -473,21 +519,34 @@ private:
   void generateFreeFunction(
       OpBuilder &builder, Location loc, StringRef moduleName,
       StringRef contextTypeName,
-      ArrayRef<asl::ConstantInitGlobalStorageDeclOp> globalVars) {
+      ArrayRef<asl::ConstantInitGlobalStorageDeclOp> globalVars,
+      ASLToEmitCTypeConverter &typeConverter) {
     std::string freeFunc = "void " + moduleName.str() + "_free(" +
                            contextTypeName.str() + "* ctx) {\n";
 
-    // For simple types (like uint64_t), no cleanup is needed
-    // In the future, this would handle:
-    // - GMP types (mpz_clear, mpq_clear)
-    // - Large bitvector structs (free allocated memory)
-    // - Other dynamically allocated resources
-
+    // Cleanup GMP types and other dynamically allocated resources
     bool needsCleanup = false;
+
     for (auto globalVar : globalVars) {
-      // Check if the variable type needs cleanup
-      // TODO: Add checks for GMP types, large bitvectors, etc.
-      (void)globalVar; // Suppress unused variable warning
+      Type varType = globalVar.getType();
+      Type convertedType = typeConverter.convertType(varType);
+
+      // Check if this is a GMP integer type that needs cleanup
+      if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(convertedType)) {
+        StringRef typeName = opaqueType.getValue();
+        std::string varName = sanitizeIdentifier(globalVar.getName());
+
+        if (typeName == "mpz_t") {
+          // GMP integer requires mpz_clear
+          freeFunc += "  mpz_clear(ctx->" + varName + ");\n";
+          needsCleanup = true;
+        } else if (typeName == "mpq_t") {
+          // GMP rational requires mpq_clear
+          freeFunc += "  mpq_clear(ctx->" + varName + ");\n";
+          needsCleanup = true;
+        }
+        // TODO: Add cleanup for other dynamically allocated types
+      }
     }
 
     if (!needsCleanup) {
