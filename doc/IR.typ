@@ -77,6 +77,12 @@ The `asl.tuple` type is `!asl.tuple<types>`, where `types` is an `ArrayAttr` of 
 === Array Type <t_array>
 The `asl.array` type is `!asl.array<element_type, index>`, where `element_type` is a `TypeAttr` and `index` is an `ArrayIndexAttr` (see @array_index). It should be explicitly converted by `E_ATC` (see @e_atc_array).
 
+ASL supports two kinds of arrays:
+- *Integer-indexed arrays* (`ArrayLengthExpr`): Consecutive elements at positions 0 to N-1, where N is a symbolically evaluable constrained integer expression
+- *Enumeration-indexed arrays* (`ArrayLengthEnum`): Dictionary-like structure where keys are enumeration labels
+
+For lowering to EmitC and C code generation, see the Array Types section in Pass.typ which details how arrays are lowered to native C arrays with appropriate element types and initialization/cleanup strategies.
+
 === Record Type <t_record>
 The `asl.record` type is `!asl.record<fields>`, where `fields` is an `ArrayAttr` of `RecordFieldAttr`.
 

@@ -774,7 +774,8 @@ struct JSONImporter {
   }
 
   // Parse literal -> produce Value via ops
-  llvm::Expected<Value> parseLiteral(const llvm::json::Object &obj) {
+  llvm::Expected<Value> parseLiteral(const llvm::json::Object &obj,
+                                     Type expectedType = Type()) {
     auto ltype = obj.getString("type");
     if (!ltype)
       return makeError("literal missing type");
@@ -812,8 +813,16 @@ struct JSONImporter {
       auto valueStr = obj.getString("value");
       if (!valueStr)
         return makeError("bitvector literal missing value");
-      auto bitsTy = asl::BitsType::get(&ctx, builder.getI64IntegerAttr(-1),
-                                       builder.getArrayAttr({}));
+
+      // Use expectedType if it's a BitsType, otherwise use -1 width
+      Type bitsTy;
+      if (expectedType && llvm::isa<asl::BitsType>(expectedType)) {
+        bitsTy = expectedType;
+      } else {
+        bitsTy = asl::BitsType::get(&ctx, builder.getI64IntegerAttr(-1),
+                                    builder.getArrayAttr({}));
+      }
+
       auto op = builder.create<asl::LiteralBitvectorOp>(
           loc, bitsTy, builder.getStringAttr(*valueStr));
       return op.getResult();
@@ -1236,7 +1245,8 @@ struct JSONImporter {
     return makeError("unsupported lexpr kind: ", k);
   }
 
-  llvm::Expected<Value> parseExpr(const llvm::json::Value &v) {
+  llvm::Expected<Value> parseExpr(const llvm::json::Value &v,
+                                  Type expectedType = Type()) {
     ContextSetter guard(*this, &v);
     auto *obj = v.getAsObject();
     if (!obj)
@@ -1252,7 +1262,7 @@ struct JSONImporter {
       auto *litObj = litV->getAsObject();
       if (!litObj)
         return makeError("literal node not object");
-      return parseLiteral(*litObj);
+      return parseLiteral(*litObj, expectedType);
     } else if (k == "E_Var") {
       auto name = obj->getString("name");
       if (!name)
@@ -1883,15 +1893,32 @@ struct JSONImporter {
       auto length = parseExpr(*lengthV);
       if (!length)
         return length.takeError();
-      auto value = parseExpr(*valueV);
+
+      // Extract element type from expectedType if available
+      Type elementType;
+      if (expectedType) {
+        if (auto arrTy = llvm::dyn_cast<asl::ArrayType>(expectedType)) {
+          elementType = arrTy.getElementType().getValue();
+        }
+      }
+
+      auto value = parseExpr(*valueV, elementType);
       if (!value)
         return value.takeError();
-      auto arrayType = asl::ArrayType::get(
-          &ctx, TypeAttr::get(value->getType()),
-          asl::ArrayIndexAttr::get(
-              &ctx,
-              asl::ArrayIndexKindAttr::get(&ctx, asl::ArrayIndexKind::int_type),
-              builder.getI64IntegerAttr(-1), nullptr, nullptr));
+
+      // Use expectedType if available, otherwise construct from parsed value
+      Type arrayType;
+      if (expectedType && llvm::isa<asl::ArrayType>(expectedType)) {
+        arrayType = expectedType;
+      } else {
+        arrayType = asl::ArrayType::get(
+            &ctx, TypeAttr::get(value->getType()),
+            asl::ArrayIndexAttr::get(&ctx,
+                                     asl::ArrayIndexKindAttr::get(
+                                         &ctx, asl::ArrayIndexKind::int_type),
+                                     builder.getI64IntegerAttr(-1), nullptr,
+                                     nullptr));
+      }
       auto op = builder.create<asl::ArrayOp>(loc, arrayType, *length, *value);
       return op.getResult();
     } else if (k == "E_EnumArray") {

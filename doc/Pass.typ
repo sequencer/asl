@@ -1916,6 +1916,915 @@ Using C `struct` types for ASL tuples ensures:
 
 The mapping from ASL tuple types to C structs provides an efficient, type-safe representation that integrates seamlessly with the C type system while preserving ASL's semantic properties.
 
+== Array Types <array_type_lowering>
+
+ASL array types (`!asl.array<element_type, index>`) represent fixed-length homogeneous collections where all elements have the same type. Arrays are a fundamental data structure in ASL, used extensively for modeling architectural state such as register files, memory banks, and vector operations. Arrays are lowered to C arrays with appropriate element types and static sizing.
+
+#table(
+  columns: 3,
+  [ASL Type], [C Type], [Notes],
+  [`!asl.array<T, ArrayLengthExpr(N)>`], [`T arr[N]`], [Integer-indexed array of size N],
+  [`!asl.array<T, ArrayLengthEnum(E, L)>`], [`T arr[L]`], [Enumeration-indexed array with L labels],
+)
+
+=== Array Type Semantics <array_semantics>
+
+ASL array types have the following characteristics:
+
+- *Homogeneous Elements*: All elements must have the same type
+- *Fixed Length*: Array size is determined at compile time and cannot change at runtime
+- *Mutable Elements*: Unlike tuples, array elements can be modified after creation
+- *Immutable Length*: The array length itself cannot be modified
+- *Zero-Based Indexing*: Integer-indexed arrays use 0-based indexing (0 to N-1)
+- *Two Index Types*: Arrays can be indexed by integers or enumeration types
+- *Value Semantics*: Arrays are passed by value unless explicitly passed by reference
+
+==== Integer-Indexed Arrays <int_indexed_arrays_semantics>
+
+Integer-indexed arrays represent consecutive sequences of elements:
+- Indices range from 0 to array_length - 1 (inclusive)
+- The array length expression must be symbolically evaluable
+- The length must evaluate to a constrained integer at compile time
+- Out-of-bounds access is undefined behavior (may include runtime checks)
+
+==== Enumeration-Indexed Arrays <enum_indexed_arrays_semantics>
+
+Enumeration-indexed arrays use enumeration literals as keys:
+- Each enumeration label corresponds to exactly one array element
+- Array size equals the number of labels in the enumeration type
+- Type-safe access: only valid enumeration values can be used as indices
+- Internally represented as integer-indexed arrays (enum values map to 0, 1, 2, ...)
+
+=== C Array Type <c_array_type>
+
+Using C native arrays provides:
+
+- Direct hardware mapping with zero abstraction overhead
+- Contiguous memory layout for cache efficiency
+- Compile-time size checking
+- Efficient indexing with pointer arithmetic
+- Natural integration with C calling conventions
+- Compatibility with existing C libraries and tools
+
+=== Array Type Declaration <array_declaration>
+
+ASL array types are lowered to C array declarations with compile-time constant sizes:
+
+*ASL integer-indexed array:*
+```asl
+type RegisterFile of array [32] of bits(64);
+type MemoryBank of array [256] of bits(8);
+type Matrix of array [4] of array [4] of real;
+```
+
+*Lowered to C:*
+```c
+// For array [32] of bits(64)
+typedef uint64_t RegisterFile[32];
+
+// For array [256] of bits(8)
+typedef uint8_t MemoryBank[256];
+
+// For array [4] of array [4] of real (nested arrays)
+typedef mpq_t Matrix[4][4];
+
+// Initialization functions
+static inline void RegisterFile_init(RegisterFile rf) {
+  for (int i = 0; i < 32; i++) {
+    rf[i] = 0ULL;
+  }
+}
+
+static inline void MemoryBank_init(MemoryBank mem) {
+  for (int i = 0; i < 256; i++) {
+    mem[i] = 0;
+  }
+}
+
+static inline void Matrix_init(Matrix m) {
+  for (int i = 0; i < 4; i++) {
+    for (int j = 0; j < 4; j++) {
+      mpq_init(m[i][j]);
+    }
+  }
+}
+
+// Cleanup functions
+static inline void RegisterFile_free(RegisterFile rf) {
+  // No cleanup needed for primitive types
+}
+
+static inline void MemoryBank_free(MemoryBank mem) {
+  // No cleanup needed for primitive types
+}
+
+static inline void Matrix_free(Matrix m) {
+  for (int i = 0; i < 4; i++) {
+    for (int j = 0; j < 4; j++) {
+      mpq_clear(m[i][j]);
+    }
+  }
+}
+```
+
+*ASL enumeration-indexed array:*
+```asl
+type Coord of enumeration {X, Y, Z};
+type Point of array [Coord] of integer;
+```
+
+*Lowered to C:*
+```c
+// Enumeration definition
+typedef enum Coord {
+  Coord_X = 0,
+  Coord_Y = 1,
+  Coord_Z = 2
+} Coord;
+
+// Array indexed by enumeration
+typedef mpz_t Point[3];  // Size = number of enum labels
+
+// Initialization
+static inline void Point_init(Point p) {
+  for (int i = 0; i < 3; i++) {
+    mpz_init(p[i]);
+  }
+}
+
+// Cleanup
+static inline void Point_free(Point p) {
+  for (int i = 0; i < 3; i++) {
+    mpz_clear(p[i]);
+  }
+}
+```
+
+=== Array Construction and Initialization <array_construction>
+
+ASL supports array construction with uniform initial values:
+
+*ASL array construction:*
+```asl
+var zeros: array [16] of integer = [0 repeated 16];
+var flags: array [8] of boolean = [FALSE repeated 8];
+var identity: array [3] of array [3] of real;
+
+// Initialize identity matrix
+for i = 0 to 2 do
+  for j = 0 to 2 do
+    identity[i][j] = if i == j then 1.0 else 0.0;
+  end
+end
+```
+
+*Lowered to C:*
+```c
+// Array declarations
+mpz_t zeros[16];
+bool flags[8];
+mpq_t identity[3][3];
+
+// Initialize zeros array
+for (int i = 0; i < 16; i++) {
+  mpz_init_set_ui(zeros[i], 0);
+}
+
+// Initialize flags array
+for (int i = 0; i < 8; i++) {
+  flags[i] = false;
+}
+
+// Initialize identity matrix
+for (int i = 0; i < 3; i++) {
+  for (int j = 0; j < 3; j++) {
+    mpq_init(identity[i][j]);
+  }
+}
+
+// Set identity matrix values
+for (int i = 0; i < 3; i++) {
+  for (int j = 0; j < 3; j++) {
+    if (i == j) {
+      mpq_set_ui(identity[i][j], 1, 1);  // 1/1
+    } else {
+      mpq_set_ui(identity[i][j], 0, 1);  // 0/1
+    }
+  }
+}
+
+// Later cleanup
+for (int i = 0; i < 16; i++) {
+  mpz_clear(zeros[i]);
+}
+
+for (int i = 0; i < 3; i++) {
+  for (int j = 0; j < 3; j++) {
+    mpq_clear(identity[i][j]);
+  }
+}
+```
+
+=== Array Element Access <array_element_access>
+
+Array elements are accessed using standard C array indexing:
+
+*ASL integer-indexed array access:*
+```asl
+var registers: array [32] of bits(64);
+var x: bits(64) = registers[5];
+registers[10] = 0xDEADBEEF;
+```
+
+*Lowered to C:*
+```c
+uint64_t registers[32];
+
+// Initialize
+for (int i = 0; i < 32; i++) {
+  registers[i] = 0ULL;
+}
+
+// Read access: x = registers[5]
+uint64_t x = registers[5];
+
+// Write access: registers[10] = 0xDEADBEEF
+registers[10] = 0xDEADBEEFULL;
+```
+
+*ASL enumeration-indexed array access:*
+```asl
+type Coord of enumeration {X, Y, Z};
+var position: array [Coord] of integer;
+
+func set_x(value: integer)
+begin
+  position[X] = value;
+end
+
+func get_y() => integer
+begin
+  return position[Y];
+end
+```
+
+*Lowered to C:*
+```c
+typedef enum Coord {
+  Coord_X = 0,
+  Coord_Y = 1,
+  Coord_Z = 2
+} Coord;
+
+// In context structure
+typedef struct context {
+  mpz_t position[3];
+  // ...
+} context;
+
+void set_x(context* ctx, const mpz_t value) {
+  mpz_set(ctx->position[Coord_X], value);
+}
+
+void get_y(mpz_t result, context* ctx) {
+  mpz_set(result, ctx->position[Coord_Y]);
+}
+
+// Initialization
+static inline void context_init_position(context* ctx) {
+  for (int i = 0; i < 3; i++) {
+    mpz_init(ctx->position[i]);
+  }
+}
+
+// Cleanup
+void context_free(context* ctx) {
+  for (int i = 0; i < 3; i++) {
+    mpz_clear(ctx->position[i]);
+  }
+  // ...
+}
+```
+
+=== Arrays of Primitive Types <arrays_of_primitives>
+
+Arrays of primitive types (integers, booleans, bitvectors) map directly to C arrays:
+
+*ASL primitive-type arrays:*
+```asl
+var bytes: array [256] of bits(8);
+var flags: array [64] of boolean;
+var words: array [128] of bits(32);
+```
+
+*Lowered to C:*
+```c
+// Direct C array declarations - no special initialization needed
+uint8_t bytes[256];
+bool flags[64];
+uint32_t words[128];
+
+// Simple initialization
+void init_arrays() {
+  for (int i = 0; i < 256; i++) bytes[i] = 0;
+  for (int i = 0; i < 64; i++) flags[i] = false;
+  for (int i = 0; i < 128; i++) words[i] = 0;
+}
+
+// No cleanup needed for primitive types
+```
+
+=== Arrays of GMP Types <arrays_of_gmp_types>
+
+Arrays of arbitrary-precision types require element-wise initialization and cleanup:
+
+*ASL GMP-type arrays:*
+```asl
+var bigints: array [10] of integer;
+var rationals: array [5] of real;
+```
+
+*Lowered to C:*
+```c
+// Array declarations
+mpz_t bigints[10];
+mpq_t rationals[5];
+
+// Initialization - each element must be initialized
+void init_gmp_arrays() {
+  for (int i = 0; i < 10; i++) {
+    mpz_init(bigints[i]);
+  }
+  
+  for (int i = 0; i < 5; i++) {
+    mpq_init(rationals[i]);
+  }
+}
+
+// Cleanup - each element must be cleaned up
+void free_gmp_arrays() {
+  for (int i = 0; i < 10; i++) {
+    mpz_clear(bigints[i]);
+  }
+  
+  for (int i = 0; i < 5; i++) {
+    mpq_clear(rationals[i]);
+  }
+}
+
+// Operations on GMP array elements
+void set_bigint_element(int index, const mpz_t value) {
+  if (index >= 0 && index < 10) {
+    mpz_set(bigints[index], value);
+  }
+}
+
+void get_bigint_element(mpz_t result, int index) {
+  if (index >= 0 && index < 10) {
+    mpz_set(result, bigints[index]);
+  }
+}
+```
+
+=== Arrays of Structured Types <arrays_of_structured_types>
+
+Arrays can contain tuples, records, or other structured types:
+
+*ASL structured-type arrays:*
+```asl
+type Point of (integer, integer);
+type Polygon of array [8] of Point;
+
+var shape: Polygon;
+```
+
+*Lowered to C:*
+```c
+// Tuple type for Point
+typedef struct Point {
+  mpz_t item0;
+  mpz_t item1;
+} Point;
+
+// Array of tuples
+typedef Point Polygon[8];
+
+// Initialization - each tuple in array must be initialized
+static inline void Polygon_init(Polygon poly) {
+  for (int i = 0; i < 8; i++) {
+    mpz_init(poly[i].item0);
+    mpz_init(poly[i].item1);
+  }
+}
+
+// Cleanup
+static inline void Polygon_free(Polygon poly) {
+  for (int i = 0; i < 8; i++) {
+    mpz_clear(poly[i].item0);
+    mpz_clear(poly[i].item1);
+  }
+}
+
+// Usage
+Polygon shape;
+Polygon_init(shape);
+
+// Set a point in the polygon: shape[3] = (10, 20)
+mpz_set_ui(shape[3].item0, 10);
+mpz_set_ui(shape[3].item1, 20);
+
+// Access a point: let p = shape[5]
+Point p;
+mpz_init_set(p.item0, shape[5].item0);
+mpz_init_set(p.item1, shape[5].item1);
+
+// Cleanup
+Polygon_free(shape);
+mpz_clear(p.item0);
+mpz_clear(p.item1);
+```
+
+=== Multi-Dimensional Arrays <multi_dimensional_arrays>
+
+ASL supports multi-dimensional arrays through nesting:
+
+*ASL multi-dimensional array:*
+```asl
+type Matrix of array [4] of array [4] of integer;
+var transform: Matrix;
+
+func set_cell(row: integer, col: integer, value: integer)
+begin
+  transform[row][col] = value;
+end
+```
+
+*Lowered to C:*
+```c
+// Multi-dimensional array (4x4 matrix)
+typedef mpz_t Matrix[4][4];
+
+// In context
+typedef struct context {
+  Matrix transform;
+  // ...
+} context;
+
+// Initialization
+static inline void context_init_transform(context* ctx) {
+  for (int i = 0; i < 4; i++) {
+    for (int j = 0; j < 4; j++) {
+      mpz_init(ctx->transform[i][j]);
+    }
+  }
+}
+
+// Set cell function
+void set_cell(context* ctx, const mpz_t row, const mpz_t col, const mpz_t value) {
+  // Convert mpz_t indices to C int (with bounds checking)
+  if (mpz_fits_slong_p(row) && mpz_fits_slong_p(col)) {
+    long r = mpz_get_si(row);
+    long c = mpz_get_si(col);
+    
+    if (r >= 0 && r < 4 && c >= 0 && c < 4) {
+      mpz_set(ctx->transform[r][c], value);
+    }
+  }
+}
+
+// Cleanup
+void context_free_transform(context* ctx) {
+  for (int i = 0; i < 4; i++) {
+    for (int j = 0; j < 4; j++) {
+      mpz_clear(ctx->transform[i][j]);
+    }
+  }
+}
+```
+
+=== Array Assignment and Copying <array_assignment>
+
+ASL arrays have value semantics. Array assignment performs a deep copy:
+
+*ASL array assignment:*
+```asl
+var source: array [[8]] of integer;
+var dest: array [[8]] of integer;
+
+// ... initialize source ...
+
+dest = source;  // Deep copy all elements
+```
+
+*Lowered to C:*
+```c
+mpz_t source[8];
+mpz_t dest[8];
+
+// Initialize both arrays
+for (int i = 0; i < 8; i++) {
+  mpz_init(source[i]);
+  mpz_init(dest[i]);
+}
+
+// Set source values
+for (int i = 0; i < 8; i++) {
+  mpz_set_ui(source[i], i * 10);
+}
+
+// Deep copy: dest = source
+for (int i = 0; i < 8; i++) {
+  mpz_set(dest[i], source[i]);
+}
+
+// Cleanup
+for (int i = 0; i < 8; i++) {
+  mpz_clear(source[i]);
+  mpz_clear(dest[i]);
+}
+```
+
+=== Arrays in Function Parameters <arrays_in_functions>
+
+Arrays are passed by pointer in C function signatures:
+
+*ASL function with array parameter:*
+```asl
+func sum_array(arr: array [10] of integer) => integer
+begin
+  var total: integer = 0;
+  for i = 0 to 9 do
+    total = total + arr[i];
+  end
+  return total;
+end
+
+func fill_array(arr: array [10] of integer, value: integer)
+begin
+  for i = 0 to 9 do
+    arr[i] = value;
+  end
+end
+```
+
+*Lowered to C:*
+```c
+// Read-only array parameter
+void sum_array(mpz_t result, const mpz_t arr[10]) {
+  mpz_t total;
+  mpz_init_set_ui(total, 0);
+  
+  for (int i = 0; i < 10; i++) {
+    mpz_add(total, total, arr[i]);
+  }
+  
+  mpz_set(result, total);
+  mpz_clear(total);
+}
+
+// Mutable array parameter
+void fill_array(mpz_t arr[10], const mpz_t value) {
+  for (int i = 0; i < 10; i++) {
+    mpz_set(arr[i], value);
+  }
+}
+
+// Usage
+mpz_t my_array[10];
+mpz_t sum_result, fill_value;
+
+// Initialize
+for (int i = 0; i < 10; i++) {
+  mpz_init(my_array[i]);
+}
+mpz_init(sum_result);
+mpz_init_set_ui(fill_value, 42);
+
+// Call functions
+fill_array(my_array, fill_value);
+sum_array(sum_result, my_array);  // sum_result = 420
+
+// Cleanup
+for (int i = 0; i < 10; i++) {
+  mpz_clear(my_array[i]);
+}
+mpz_clear(sum_result);
+mpz_clear(fill_value);
+```
+
+=== Array Bounds Checking <array_bounds_checking>
+
+For safety, array accesses can include runtime bounds checking:
+
+*ASL array access (potentially out of bounds):*
+```asl
+var arr: array [10] of integer;
+var idx: integer;
+// idx may be any value
+var value: integer = arr[idx];
+```
+
+*Lowered to C with bounds checking:*
+```c
+mpz_t arr[10];
+mpz_t idx, value;
+
+// Initialize
+for (int i = 0; i < 10; i++) {
+  mpz_init(arr[i]);
+}
+mpz_init(idx);
+mpz_init(value);
+
+// ... idx gets some value ...
+
+// Array access with bounds checking
+if (mpz_fits_slong_p(idx)) {
+  long index = mpz_get_si(idx);
+  if (index >= 0 && index < 10) {
+    mpz_set(value, arr[index]);
+  } else {
+    // Handle out-of-bounds access
+    // Could assert, throw exception, or set error flag
+    fprintf(stderr, "Array index out of bounds: %ld\n", index);
+    abort();
+  }
+} else {
+  // Index doesn't fit in long - definitely out of bounds
+  fprintf(stderr, "Array index too large\n");
+  abort();
+}
+```
+
+*Note:* Bounds checking can be optimized away by the compiler when:
+- The index is a compile-time constant within bounds
+- Static analysis proves the index is always within bounds
+- Compiler optimizations determine checking is redundant
+
+=== Dynamic Array Size from Parameters <dynamic_array_size>
+
+When array size depends on function parameters, the size must be materialized at compile-time:
+
+*ASL function with parameterized array size:*
+```asl
+func create_buffer(n: integer {8, 16, 32}) => array [n] of bits(8)
+begin
+  var buffer: array [n] of bits(8);
+  for i = 0 to n-1 do
+    buffer[i] = 0;
+  end
+  return buffer;
+end
+```
+
+*Lowered to C (requires template instantiation or compile-time evaluation):*
+```c
+// Case 1: n = 8
+typedef uint8_t buffer_8[8];
+
+void create_buffer_8(buffer_8 result) {
+  for (int i = 0; i < 8; i++) {
+    result[i] = 0;
+  }
+}
+
+// Case 2: n = 16
+typedef uint8_t buffer_16[16];
+
+void create_buffer_16(buffer_16 result) {
+  for (int i = 0; i < 16; i++) {
+    result[i] = 0;
+  }
+}
+
+// Case 3: n = 32
+typedef uint8_t buffer_32[32];
+
+void create_buffer_32(buffer_32 result) {
+  for (int i = 0; i < 32; i++) {
+    result[i] = 0;
+  }
+}
+
+// Dispatch based on parameter value
+void create_buffer(uint8_t* result, int n) {
+  switch (n) {
+    case 8:
+      create_buffer_8((buffer_8*)result);
+      break;
+    case 16:
+      create_buffer_16((buffer_16*)result);
+      break;
+    case 32:
+      create_buffer_32((buffer_32*)result);
+      break;
+    default:
+      fprintf(stderr, "Invalid buffer size: %d\n", n);
+      abort();
+  }
+}
+```
+
+*Alternative:* For truly dynamic sizes at runtime, VLA (Variable Length Arrays) or heap allocation may be used, though this deviates from ASL's static array semantics:
+
+```c
+// Using VLA (C99, but not all compilers support it for all contexts)
+void create_buffer_vla(uint8_t result[], size_t n) {
+  for (size_t i = 0; i < n; i++) {
+    result[i] = 0;
+  }
+}
+
+// Using heap allocation (requires explicit memory management)
+uint8_t* create_buffer_heap(size_t n) {
+  uint8_t* buffer = malloc(n * sizeof(uint8_t));
+  if (buffer) {
+    for (size_t i = 0; i < n; i++) {
+      buffer[i] = 0;
+    }
+  }
+  return buffer;  // Caller must free
+}
+```
+
+=== Arrays in Global State <arrays_in_global_state>
+
+Arrays are commonly used for global architectural state:
+
+*ASL global arrays:*
+```asl
+var register_file: array [32] of bits(64);
+var memory: array [65536] of bits(8);
+var flags: array [16] of boolean;
+```
+
+*Lowered to C in context structure:*
+```c
+typedef struct context {
+  uint64_t register_file[32];
+  uint8_t memory[65536];
+  bool flags[16];
+  // ... other global state
+} context;
+
+// Initialization
+void context_init(context* ctx) {
+  context_init_register_file(ctx);
+  context_init_memory(ctx);
+  context_init_flags(ctx);
+  // ... other initialization
+}
+
+static inline void context_init_register_file(context* ctx) {
+  for (int i = 0; i < 32; i++) {
+    ctx->register_file[i] = 0ULL;
+  }
+}
+
+static inline void context_init_memory(context* ctx) {
+  memset(ctx->memory, 0, sizeof(ctx->memory));
+}
+
+static inline void context_init_flags(context* ctx) {
+  for (int i = 0; i < 16; i++) {
+    ctx->flags[i] = false;
+  }
+}
+
+// Cleanup (no cleanup needed for primitive arrays)
+void context_free(context* ctx) {
+  // Primitive arrays don't need cleanup
+}
+```
+
+=== Array Slicing Operations <array_slicing>
+
+Array slicing in ASL creates sub-arrays or views:
+
+*ASL array slicing (conceptual):*
+```asl
+var arr: array [16] of bits(8);
+// In practice, ASL may not support direct slice-to-array conversions
+// but operations on slices can be lowered element-by-element
+```
+
+*Lowered to C (element-wise operations):*
+```c
+uint8_t arr[16];
+
+// Copy a slice: dest[0..3] = src[4..7]
+uint8_t dest[4];
+for (int i = 0; i < 4; i++) {
+  dest[i] = arr[4 + i];
+}
+
+// Set a slice: arr[8..11] = 0xFF
+for (int i = 8; i < 12; i++) {
+  arr[i] = 0xFF;
+}
+```
+
+=== Example: Complete Array Lowering <array_complete_example>
+
+*ASL register file implementation:*
+```asl
+var R: array [32] of bits(64);
+
+func read_register(n: integer) => bits(64)
+begin
+  return R[n];
+end
+
+func write_register(n: integer, value: bits(64))
+begin
+  R[n] = value;
+end
+
+func initialize_registers()
+begin
+  for i = 0 to 31 do
+    R[i] = Zeros{64};
+  end
+end
+```
+
+*Lowered to C:*
+```c
+// Context structure
+typedef struct context {
+  uint64_t R[32];
+  // ... other state
+} context;
+
+// Read register
+uint64_t read_register(context* ctx, const mpz_t n) {
+  if (mpz_fits_slong_p(n)) {
+    long index = mpz_get_si(n);
+    if (index >= 0 && index < 32) {
+      return ctx->R[index];
+    }
+  }
+  // Out of bounds
+  fprintf(stderr, "Register index out of bounds\n");
+  abort();
+}
+
+// Write register
+void write_register(context* ctx, const mpz_t n, uint64_t value) {
+  if (mpz_fits_slong_p(n)) {
+    long index = mpz_get_si(n);
+    if (index >= 0 && index < 32) {
+      ctx->R[index] = value;
+      return;
+    }
+  }
+  // Out of bounds
+  fprintf(stderr, "Register index out of bounds\n");
+  abort();
+}
+
+// Initialize registers
+void initialize_registers(context* ctx) {
+  for (int i = 0; i < 32; i++) {
+    ctx->R[i] = 0ULL;  // Zeros{64}
+  }
+}
+
+// Context initialization includes array initialization
+static inline void context_init_R(context* ctx) {
+  initialize_registers(ctx);
+}
+
+void context_init(context* ctx) {
+  context_init_R(ctx);
+  // ... other initialization
+}
+
+// No cleanup needed for primitive array
+void context_free(context* ctx) {
+  // R is primitive array, no cleanup needed
+}
+```
+
+=== Rationale for C Array Type <array_rationale>
+
+Using native C arrays for ASL arrays ensures:
+
+1. *Zero Overhead*: Direct hardware mapping with no abstraction cost
+2. *Cache Efficiency*: Contiguous memory layout optimizes cache utilization
+3. *Type Safety*: C's type system ensures element type consistency
+4. *Compile-Time Sizing*: Static array sizes enable stack allocation and optimization
+5. *Natural Indexing*: Standard C indexing syntax is intuitive and efficient
+6. *Debugger Support*: All C debuggers can inspect array contents naturally
+7. *Standards Compliance*: C arrays are universally supported across all platforms
+8. *Interoperability*: Direct compatibility with existing C libraries and tools
+9. *Optimization Potential*: Compilers can apply vectorization and loop optimizations
+10. *Memory Predictability*: Static allocation provides predictable memory usage
+
+The key challenge is managing complex element types (especially GMP types) that require explicit initialization and cleanup. The lowering pass generates appropriate helper functions to handle these cases systematically.
+
+For enumeration-indexed arrays, the mapping to integer indices is transparent and maintains type safety while avoiding the overhead of dictionary-like structures. The enumeration values are compile-time constants that directly translate to array offsets, providing the same performance as integer-indexed arrays while preserving ASL's type-safe semantics.
+
 = Global State Management <global_state_management>
 
 Each MLIR module is lowered to C code with a structured approach to managing global state. This design ensures thread safety, clean initialization, and proper resource management.
