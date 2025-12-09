@@ -68,19 +68,15 @@ The following issues relate to semantic interpretation in the MLIR dialect, not 
 
 === High Severity
 
-==== Integer Division Semantics
+==== Integer Division Semantics (RESOLVED)
 
-*Problem:* The ASL spec defines `DIV` as exact integer division, while `DIVRM` provides floor division toward negative infinity. The dialect documentation does not clarify these semantics.
+*Problem:* The ASL spec defines `DIV` as exact integer division, while `DIVRM` provides floor division toward negative infinity.
 
-*herdtools7 AST.mli:*
-```ocaml
-| `DIV      (** Integer division *)
-| `DIVRM    (** Inexact integer division, with rounding towards negative infinity *)
-```
+*Resolution:* Documentation and TableGen descriptions have been updated:
+- `DIV` (`asl.expr.binop.div`): Exact integer division, undefined if not divisible
+- `DIVRM` (`asl.expr.binop.divrm`): Floor division toward negative infinity
 
-*Recommendation:* Document that:
-- `DIV` performs exact integer division (result undefined if not divisible)
-- `DIVRM` performs floor division (rounds toward negative infinity)
+See `ASLRational.typ` section "Integer Division Semantics" for detailed documentation with examples.
 
 ==== Short-Circuit Semantics
 
@@ -172,18 +168,18 @@ The following issues relate to semantic interpretation in the MLIR dialect, not 
   columns: (auto, auto, auto, auto),
   inset: 6pt,
   align: (left, center, left, left),
-  [*Issue*], [*Severity*], [*Layer*], [*Action*],
-  [Division semantics], [High], [Dialect], [Document exact vs floor],
-  [Short-circuit], [High], [Dialect], [Add trait or document],
-  [Bitvector wraparound], [High], [Dialect], [Document type semantics],
-  [Type satisfaction], [Medium], [Frontend], [Document frontend handles],
-  [Symbolically evaluable], [Medium], [Frontend], [Document frontend handles],
-  [Loop limits], [Medium], [Dialect], [Document semantics],
-  [Execution graphs], [Low], [N/A], [Document out of scope],
-  [Real representation], [Low], [Dialect], [Document GMP mapping],
-  [Valueless exceptions], [Low], [Dialect], [Document empty fields],
-  [Collection constraints], [Low], [Frontend], [Document frontend handles],
-  [Mixed int/real], [Low], [Dialect], [Document coercion],
+  [*Issue*], [*Severity*], [*Layer*], [*Status*],
+  [Division semantics], [High], [Dialect], [RESOLVED],
+  [Short-circuit], [High], [Dialect], [Open],
+  [Bitvector wraparound], [High], [Dialect], [Open],
+  [Type satisfaction], [Medium], [Frontend], [Documented],
+  [Symbolically evaluable], [Medium], [Frontend], [Documented],
+  [Loop limits], [Medium], [Dialect], [Open],
+  [Execution graphs], [Low], [N/A], [Out of scope],
+  [Real representation], [Low], [Dialect], [Open],
+  [Valueless exceptions], [Low], [Dialect], [Open],
+  [Collection constraints], [Low], [Frontend], [Documented],
+  [Mixed int/real], [Low], [Dialect], [Open],
 )
 
 == Conclusion
@@ -194,9 +190,12 @@ The JSON backend is complete and correctly serializes all AST constructs from th
 
 === MLIR Dialect
 
-The high severity issues affect semantic correctness:
+==== Resolved Issues
 
-+ *Division semantics* - `DIV` is exact division, `DIVRM` is floor division
++ *Division semantics* - Documented in ASLRational.typ and TableGen
+
+==== Remaining High Severity Issues
+
 + *Short-circuit evaluation* - `BAND`, `BOR`, `IMPL` have lazy evaluation
 + *Bitvector wraparound* - Bitvector arithmetic wraps, integer does not
 

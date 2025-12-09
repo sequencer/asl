@@ -286,6 +286,24 @@ columns: 4,
   [CONCAT], [`asl.expr.binop.concat`], [`any`, `any`], [`any`],
 )
 
+==== Integer Division Semantics <division_semantics>
+ASL provides two integer division operations with distinct semantics:
+
+- *DIV* (`asl.expr.binop.div`): Exact integer division. The dividend must be evenly divisible by the divisor. If the division is not exact, the result is undefined (implementation-defined behavior). Use this when you know the division is exact.
+
+- *DIVRM* (`asl.expr.binop.divrm`): Floor division (rounds toward negative infinity). This operation always produces a defined result. Equivalent to Python's `//` operator.
+
+#table(
+  columns: 5,
+  inset: 6pt,
+  [Expression], [DIV], [DIVRM], [Truncated], [Notes],
+  [`7 / 3`], [undefined], [2], [2], [Not exact],
+  [`-7 / 3`], [undefined], [-3], [-2], [Floor vs truncate],
+  [`7 / -3`], [undefined], [-3], [-2], [Floor vs truncate],
+  [`-7 / -3`], [undefined], [2], [2], [Floor vs truncate],
+  [`6 / 3`], [2], [2], [2], [Exact division],
+)
+
 === Unary Operator Expressions <e_unop>
 `asl.expr.unop` represents unary operator expressions:
 #table(columns: 4,

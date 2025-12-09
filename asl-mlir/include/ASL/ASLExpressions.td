@@ -467,9 +467,18 @@ def ASL_BinopBorOp : ASL_ExprOp<"expr.binop.bor"> {
 }
 
 def ASL_BinopDivOp : ASL_ExprOp<"expr.binop.div"> {
-  let summary = "Integer division";
-  let description =
-      [{ Integer division operation. Corresponds to DIV in ASL. }];
+  let summary = "Exact integer division";
+  let description = [{
+    Exact integer division operation. Corresponds to DIV in ASL.
+
+    This operation performs exact integer division where the dividend must be
+    evenly divisible by the divisor. The result is undefined (implementation-
+    defined behavior) if the division is not exact.
+
+    For inexact division with defined rounding behavior, use DIVRM instead.
+
+    Example: DIV(10, 5) = 2, DIV(10, 3) is undefined
+  }];
   let arguments = (ins ASL_IntType:$lhs, ASL_IntType:$rhs);
   let results = (outs ASL_IntType:$result);
   let assemblyFormat =
@@ -477,9 +486,20 @@ def ASL_BinopDivOp : ASL_ExprOp<"expr.binop.div"> {
 }
 
 def ASL_BinopDivrmOp : ASL_ExprOp<"expr.binop.divrm"> {
-  let summary = "Integer division with rounding towards negative infinity";
-  let description =
-      [{ Integer division with rounding towards negative infinity. Corresponds to DIVRM in ASL. }];
+  let summary = "Floor division (rounds toward negative infinity)";
+  let description = [{
+    Inexact integer division with rounding towards negative infinity (floor
+    division). Corresponds to DIVRM in ASL.
+
+    This operation always produces a defined result by rounding the quotient
+    toward negative infinity. This is equivalent to Python's // operator.
+
+    Examples:
+      DIVRM(7, 3) = 2      (7 / 3 = 2.33... -> floor -> 2)
+      DIVRM(-7, 3) = -3    (-7 / 3 = -2.33... -> floor -> -3)
+      DIVRM(7, -3) = -3    (7 / -3 = -2.33... -> floor -> -3)
+      DIVRM(-7, -3) = 2    (-7 / -3 = 2.33... -> floor -> 2)
+  }];
   let arguments = (ins ASL_IntType:$lhs, ASL_IntType:$rhs);
   let results = (outs ASL_IntType:$result);
   let assemblyFormat =
