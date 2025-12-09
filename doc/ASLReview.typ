@@ -65,27 +65,13 @@ All expression types are handled: `E_Literal`, `E_Var`, `E_ATC`, `E_Binop`, `E_U
 == Semantic Issues
 
 The following issues relate to semantic interpretation in the MLIR dialect, not JSON serialization.
-==== Execution Graphs - Out of Scope
 
-*Problem:* The ASL formal semantics use execution graphs with `aslpo`, `aslctrl`, `asldata` edges for memory model analysis.
-
-*Current status:* The herdtools7 AST does not include execution graph types. This is a semantic interpretation layer above the AST.
-
-*Recommendation:* Document that execution graph analysis is out of scope for the current dialect.
-
-==== Real Number Representation (RESOLVED)
-
-*Problem:* ASL reals are "mathematical rational numbers with no bounds on precision." The mapping to runtime representation is not documented.
-
-*Resolution:* Documented in ASLRational.typ section "Real Type":
-- `!asl.real` maps to `!gmp.q` (GMP arbitrary-precision rational) for lowering
-- Ensures exact rational arithmetic without precision loss
-
-==== Valueless Exceptions
+==== Valueless Exceptions (RESOLVED)
 
 *Problem:* ASL exceptions can be valueless (marked with `-`). The dialect models this as empty field lists.
 
-*Recommendation:* Document that valueless exceptions use empty `fields` array.
+*Resolution:* Documented in ASLRational.typ section "Exception Type":
+- Valueless exceptions use empty `fields` array: `!asl.exception<[]>`
 
 ==== Collection Type Constraints
 
@@ -116,7 +102,7 @@ The following issues relate to semantic interpretation in the MLIR dialect, not 
   [Loop limits], [Medium], [Dialect], [RESOLVED],
   [Execution graphs], [Low], [N/A], [Out of scope],
   [Real representation], [Low], [Dialect], [RESOLVED],
-  [Valueless exceptions], [Low], [Dialect], [Open],
+  [Valueless exceptions], [Low], [Dialect], [RESOLVED],
   [Collection constraints], [Low], [Frontend], [Documented],
   [Mixed int/real], [Low], [Dialect], [Open],
 )

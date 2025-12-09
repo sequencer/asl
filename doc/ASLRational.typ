@@ -118,6 +118,8 @@ The `asl.record` type is `!asl.record<fields>`, where `fields` is an `ArrayAttr`
 === Exception Type <t_exception>
 The `asl.exception` type is `!asl.exception<fields>`, where `fields` is an `ArrayAttr` of `RecordFieldAttr`.
 
+ASL exceptions can be valueless (marked with `-` in the ASL source). Valueless exceptions are represented with an empty `fields` array: `!asl.exception<[]>`.
+
 === Collection Type <t_collection>
 The `asl.collection` type is `!asl.collection<fields>`, where `fields` is an `ArrayAttr` of `RecordFieldAttr`.
 
