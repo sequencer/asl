@@ -1306,18 +1306,46 @@ struct JSONImporter {
         // Default to unconstrained int.
         return intTy;
       };
+// Helper to check if a type is a bitvector type
+      auto isBitsType = [](Type t) { return llvm::isa<asl::BitsType>(t); };
+      auto isRealType = [](Type t) { return llvm::isa<asl::RealType>(t); };
+
 #define BUILD_BIN(OPCLS, RTYPE)                                                \
   result = builder.create<asl::OPCLS>(loc, RTYPE, *lhs, *rhs).getResult();     \
   break;
       do {
         if (bop == "PLUS") {
-          BUILD_BIN(BinopPlusOp, chooseSameOrPromote());
+          // Dispatch to type-specific add operation
+          if (isBitsType(lhsTy) && isBitsType(rhsTy)) {
+            BUILD_BIN(BinopBitsAddOp, lhsTy);
+          } else if (isRealType(lhsTy) || isRealType(rhsTy)) {
+            Type realTy = asl::RealType::get(&ctx);
+            BUILD_BIN(BinopRealAddOp, realTy);
+          } else {
+            BUILD_BIN(BinopIntAddOp, intTy);
+          }
         }
         if (bop == "MINUS") {
-          BUILD_BIN(BinopMinusOp, chooseSameOrPromote());
+          // Dispatch to type-specific sub operation
+          if (isBitsType(lhsTy) && isBitsType(rhsTy)) {
+            BUILD_BIN(BinopBitsSubOp, lhsTy);
+          } else if (isRealType(lhsTy) || isRealType(rhsTy)) {
+            Type realTy = asl::RealType::get(&ctx);
+            BUILD_BIN(BinopRealSubOp, realTy);
+          } else {
+            BUILD_BIN(BinopIntSubOp, intTy);
+          }
         }
         if (bop == "MUL") {
-          BUILD_BIN(BinopMulOp, chooseSameOrPromote());
+          // Dispatch to type-specific mul operation
+          if (isBitsType(lhsTy) && isBitsType(rhsTy)) {
+            BUILD_BIN(BinopBitsMulOp, lhsTy);
+          } else if (isRealType(lhsTy) || isRealType(rhsTy)) {
+            Type realTy = asl::RealType::get(&ctx);
+            BUILD_BIN(BinopRealMulOp, realTy);
+          } else {
+            BUILD_BIN(BinopIntMulOp, intTy);
+          }
         }
         if (bop == "DIV") {
           BUILD_BIN(BinopDivOp, intTy);

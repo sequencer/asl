@@ -256,7 +256,28 @@ Note: `L_Int` and `L_BitVector` literals are unconstrained by default. To apply 
 `asl.expr.atc.array` takes a `length`(`!asl.int`) operand for array size specification using `ArrayIndexAttr`, and the optional `element_type` input when requires materialization, if not requiring materialization, the `element_type` should be `TypeAttr`;
 
 === Binary Operator Expressions <e_binop>
-`asl.expr.binop` represents binary operator expressions:
+`asl.expr.binop` represents binary operator expressions. Arithmetic operations (PLUS, MINUS, MUL) are split into type-specific operations to capture different overflow semantics.
+
+==== Type-Specific Arithmetic Operations <type_specific_arith>
+
+ASL arithmetic operations have different semantics depending on operand types:
+
+#table(
+  columns: 4,
+  inset: 6pt,
+  [ASL Op], [Integer (`!asl.int`)], [Bitvector (`!asl.bits`)], [Real (`!asl.real`)],
+  [PLUS], [`asl.expr.binop.int.add`], [`asl.expr.binop.bits.add`], [`asl.expr.binop.real.add`],
+  [MINUS], [`asl.expr.binop.int.sub`], [`asl.expr.binop.bits.sub`], [`asl.expr.binop.real.sub`],
+  [MUL], [`asl.expr.binop.int.mul`], [`asl.expr.binop.bits.mul`], [`asl.expr.binop.real.mul`],
+)
+
+*Semantics:*
+- *Integer operations* (`int.add`, `int.sub`, `int.mul`): Arbitrary precision with no overflow. Results are always mathematically exact.
+- *Bitvector operations* (`bits.add`, `bits.sub`, `bits.mul`): Fixed-width unsigned modular arithmetic. Results wrap around: `(a op b) mod 2^N` where N is the bitvector width.
+- *Real operations* (`real.add`, `real.sub`, `real.mul`): Exact rational arithmetic with no precision limits.
+
+==== Other Binary Operations
+
 #table(
 columns: 4,
   [Operator], [MLIR Operation], [MLIR Operands], [MLIR Results],
@@ -268,17 +289,14 @@ columns: 4,
   [DIVRM], [`asl.expr.binop.divrm`], [`!asl.int`, `!asl.int`], [`!asl.int`],
   [XOR], [`asl.expr.binop.xor`], [`!asl.bits`, `!asl.bits`], [`!asl.bits`],
   [EQ_OP], [`asl.expr.binop.eq`], [`any`, `any`], [`i1`],
-  [GT], [`asl.expr.binop.gt`], [`!asl.int`, `!asl.int`], [`i1`],
-  [GEQ], [`asl.expr.binop.geq`], [`!asl.int`, `!asl.int`], [`i1`],
+  [GT], [`asl.expr.binop.gt`], [`any`, `any`], [`i1`],
+  [GEQ], [`asl.expr.binop.geq`], [`any`, `any`], [`i1`],
   [IMPL], [`asl.expr.binop.impl`], [`i1`, `i1`], [`i1`],
-  [LT], [`asl.expr.binop.lt`], [`!asl.int`, `!asl.int`], [`i1`],
-  [LEQ], [`asl.expr.binop.leq`], [`!asl.int`, `!asl.int`], [`i1`],
+  [LT], [`asl.expr.binop.lt`], [`any`, `any`], [`i1`],
+  [LEQ], [`asl.expr.binop.leq`], [`any`, `any`], [`i1`],
   [MOD], [`asl.expr.binop.mod`], [`!asl.int`, `!asl.int`], [`!asl.int`],
-  [MINUS], [`asl.expr.binop.minus`], [`any`, `any`], [`any`],
-  [MUL], [`asl.expr.binop.mul`], [`any`, `any`], [`any`],
   [NEQ], [`asl.expr.binop.neq`], [`any`, `any`], [`i1`],
   [OR], [`asl.expr.binop.or`], [`!asl.bits`, `!asl.bits`], [`!asl.bits`],
-  [PLUS], [`asl.expr.binop.plus`], [`any`, `any`], [`any`],
   [POW], [`asl.expr.binop.pow`], [`!asl.int`, `!asl.int`], [`!asl.int`],
   [RDIV], [`asl.expr.binop.rdiv`], [`!asl.real`, `!asl.real`], [`!asl.real`],
   [SHL], [`asl.expr.binop.shl`], [`!asl.int`, `!asl.int`], [`!asl.int`],

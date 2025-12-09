@@ -77,13 +77,16 @@ The following issues relate to semantic interpretation in the MLIR dialect, not 
 - Lowering passes must reconstruct short-circuit semantics using control flow (e.g., `scf.if`)
 - The representation assumes the frontend has validated safety or lowering will handle it
 
-==== Bitvector vs Integer Arithmetic
+==== Bitvector vs Integer Arithmetic (RESOLVED)
 
-*Problem:* ASL bitvector arithmetic wraps around (unsigned modular arithmetic), while integer arithmetic has unbounded precision. The dialect uses `AnyType` for arithmetic operations without documenting type-dependent behavior.
+*Problem:* ASL bitvector arithmetic wraps around (unsigned modular arithmetic), while integer arithmetic has unbounded precision.
 
-*Recommendation:* Document type-dependent semantics:
-- `!asl.int`: Arbitrary precision, no overflow
-- `!asl.bits`: Fixed-width, unsigned wraparound
+*Resolution:* Split polymorphic operations into type-specific variants:
+- `asl.expr.binop.int.{add,sub,mul}`: Arbitrary precision, no overflow
+- `asl.expr.binop.bits.{add,sub,mul}`: Fixed-width, unsigned wraparound (mod 2^N)
+- `asl.expr.binop.real.{add,sub,mul}`: Exact rational arithmetic
+
+The JSON importer dispatches to the appropriate operation based on operand types.
 
 === Medium Severity
 
@@ -161,7 +164,7 @@ The following issues relate to semantic interpretation in the MLIR dialect, not 
   [*Issue*], [*Severity*], [*Layer*], [*Status*],
   [Division semantics], [High], [Dialect], [RESOLVED],
   [Short-circuit], [High], [Dialect], [RESOLVED],
-  [Bitvector wraparound], [High], [Dialect], [Open],
+  [Bitvector wraparound], [High], [Dialect], [RESOLVED],
   [Type satisfaction], [Medium], [Frontend], [Documented],
   [Symbolically evaluable], [Medium], [Frontend], [Documented],
   [Loop limits], [Medium], [Dialect], [Open],
@@ -184,12 +187,9 @@ The JSON backend is complete and correctly serializes all AST constructs from th
 
 + *Division semantics* - Documented in ASLRational.typ and TableGen
 + *Short-circuit evaluation* - Documented lowering responsibility in ASLRational.typ
++ *Bitvector wraparound* - Split into type-specific operations (int/bits/real)
 
-==== Remaining High Severity Issues
-
-+ *Bitvector wraparound* - Bitvector arithmetic wraps, integer does not
-
-These require documentation or dialect changes for correct ARM specification modeling.
+All high severity issues have been resolved.
 
 === Frontend-Handled Features
 

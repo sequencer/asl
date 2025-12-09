@@ -586,22 +586,152 @@ def ASL_BinopModOp : ASL_ExprOp<"expr.binop.mod"> {
       "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
 }
 
-def ASL_BinopMinusOp : ASL_ExprOp<"expr.binop.minus"> {
-  let summary = "Subtraction for integers, reals, or bitvectors";
-  let description =
-      [{ Subtraction operation for integers, reals, or bitvectors. Corresponds to MINUS in ASL. }];
-  let arguments = (ins AnyType:$lhs, AnyType:$rhs);
-  let results = (outs AnyType:$result);
+//===----------------------------------------------------------------------===//
+// Integer Arithmetic Operations (arbitrary precision, no overflow)
+//===----------------------------------------------------------------------===//
+
+def ASL_BinopIntAddOp : ASL_ExprOp<"expr.binop.int.add"> {
+  let summary = "Integer addition (arbitrary precision)";
+  let description = [{
+    Integer addition with arbitrary precision. No overflow - the result is
+    always mathematically exact regardless of magnitude.
+
+    Corresponds to PLUS in ASL when operands are integers.
+  }];
+  let arguments = (ins ASL_IntType:$lhs, ASL_IntType:$rhs);
+  let results = (outs ASL_IntType:$result);
   let assemblyFormat =
       "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
 }
 
-def ASL_BinopMulOp : ASL_ExprOp<"expr.binop.mul"> {
-  let summary = "Multiplication for integers, reals, or bitvectors";
-  let description =
-      [{ Multiplication operation for integers, reals, or bitvectors. Corresponds to MUL in ASL. }];
-  let arguments = (ins AnyType:$lhs, AnyType:$rhs);
-  let results = (outs AnyType:$result);
+def ASL_BinopIntSubOp : ASL_ExprOp<"expr.binop.int.sub"> {
+  let summary = "Integer subtraction (arbitrary precision)";
+  let description = [{
+    Integer subtraction with arbitrary precision. No overflow - the result is
+    always mathematically exact regardless of magnitude.
+
+    Corresponds to MINUS in ASL when operands are integers.
+  }];
+  let arguments = (ins ASL_IntType:$lhs, ASL_IntType:$rhs);
+  let results = (outs ASL_IntType:$result);
+  let assemblyFormat =
+      "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
+}
+
+def ASL_BinopIntMulOp : ASL_ExprOp<"expr.binop.int.mul"> {
+  let summary = "Integer multiplication (arbitrary precision)";
+  let description = [{
+    Integer multiplication with arbitrary precision. No overflow - the result is
+    always mathematically exact regardless of magnitude.
+
+    Corresponds to MUL in ASL when operands are integers.
+  }];
+  let arguments = (ins ASL_IntType:$lhs, ASL_IntType:$rhs);
+  let results = (outs ASL_IntType:$result);
+  let assemblyFormat =
+      "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
+}
+
+//===----------------------------------------------------------------------===//
+// Bitvector Arithmetic Operations (fixed-width, unsigned wraparound)
+//===----------------------------------------------------------------------===//
+
+def ASL_BinopBitsAddOp : ASL_ExprOp<"expr.binop.bits.add"> {
+  let summary = "Bitvector addition (unsigned wraparound)";
+  let description = [{
+    Bitvector addition with unsigned modular arithmetic. The result wraps
+    around on overflow: (a + b) mod 2^N where N is the bitvector width.
+
+    Corresponds to PLUS in ASL when operands are bitvectors.
+
+    Example for 8-bit bitvectors:
+      255 + 1 = 0 (wraps around)
+      200 + 100 = 44 (300 mod 256 = 44)
+  }];
+  let arguments = (ins ASL_BitsType:$lhs, ASL_BitsType:$rhs);
+  let results = (outs ASL_BitsType:$result);
+  let assemblyFormat =
+      "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
+}
+
+def ASL_BinopBitsSubOp : ASL_ExprOp<"expr.binop.bits.sub"> {
+  let summary = "Bitvector subtraction (unsigned wraparound)";
+  let description = [{
+    Bitvector subtraction with unsigned modular arithmetic. The result wraps
+    around on underflow: (a - b) mod 2^N where N is the bitvector width.
+
+    Corresponds to MINUS in ASL when operands are bitvectors.
+
+    Example for 8-bit bitvectors:
+      0 - 1 = 255 (wraps around)
+      10 - 20 = 246 (equivalent to 10 + 256 - 20)
+  }];
+  let arguments = (ins ASL_BitsType:$lhs, ASL_BitsType:$rhs);
+  let results = (outs ASL_BitsType:$result);
+  let assemblyFormat =
+      "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
+}
+
+def ASL_BinopBitsMulOp : ASL_ExprOp<"expr.binop.bits.mul"> {
+  let summary = "Bitvector multiplication (unsigned wraparound)";
+  let description = [{
+    Bitvector multiplication with unsigned modular arithmetic. The result wraps
+    around on overflow: (a * b) mod 2^N where N is the bitvector width.
+
+    Corresponds to MUL in ASL when operands are bitvectors.
+
+    Example for 8-bit bitvectors:
+      16 * 16 = 0 (256 mod 256 = 0)
+      20 * 20 = 144 (400 mod 256 = 144)
+  }];
+  let arguments = (ins ASL_BitsType:$lhs, ASL_BitsType:$rhs);
+  let results = (outs ASL_BitsType:$result);
+  let assemblyFormat =
+      "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
+}
+
+//===----------------------------------------------------------------------===//
+// Real Arithmetic Operations (exact rational arithmetic)
+//===----------------------------------------------------------------------===//
+
+def ASL_BinopRealAddOp : ASL_ExprOp<"expr.binop.real.add"> {
+  let summary = "Real addition (exact rational)";
+  let description = [{
+    Real number addition with exact rational arithmetic. ASL reals are
+    mathematical rationals with no bounds on precision or magnitude.
+
+    Corresponds to PLUS in ASL when operands are reals.
+  }];
+  let arguments = (ins ASL_RealType:$lhs, ASL_RealType:$rhs);
+  let results = (outs ASL_RealType:$result);
+  let assemblyFormat =
+      "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
+}
+
+def ASL_BinopRealSubOp : ASL_ExprOp<"expr.binop.real.sub"> {
+  let summary = "Real subtraction (exact rational)";
+  let description = [{
+    Real number subtraction with exact rational arithmetic. ASL reals are
+    mathematical rationals with no bounds on precision or magnitude.
+
+    Corresponds to MINUS in ASL when operands are reals.
+  }];
+  let arguments = (ins ASL_RealType:$lhs, ASL_RealType:$rhs);
+  let results = (outs ASL_RealType:$result);
+  let assemblyFormat =
+      "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
+}
+
+def ASL_BinopRealMulOp : ASL_ExprOp<"expr.binop.real.mul"> {
+  let summary = "Real multiplication (exact rational)";
+  let description = [{
+    Real number multiplication with exact rational arithmetic. ASL reals are
+    mathematical rationals with no bounds on precision or magnitude.
+
+    Corresponds to MUL in ASL when operands are reals.
+  }];
+  let arguments = (ins ASL_RealType:$lhs, ASL_RealType:$rhs);
+  let results = (outs ASL_RealType:$result);
   let assemblyFormat =
       "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
 }
@@ -622,16 +752,6 @@ def ASL_BinopOrOp : ASL_ExprOp<"expr.binop.or"> {
       [{ Bitvector bitwise OR operation. Corresponds to OR in ASL. }];
   let arguments = (ins AnyType:$lhs, AnyType:$rhs);
   let results = (outs ASL_BitsType:$result);
-  let assemblyFormat =
-      "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
-}
-
-def ASL_BinopPlusOp : ASL_ExprOp<"expr.binop.plus"> {
-  let summary = "Addition for integers, reals, or bitvectors";
-  let description =
-      [{ Addition operation for integers, reals, or bitvectors. Corresponds to PLUS in ASL. }];
-  let arguments = (ins AnyType:$lhs, AnyType:$rhs);
-  let results = (outs AnyType:$result);
   let assemblyFormat =
       "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
 }
