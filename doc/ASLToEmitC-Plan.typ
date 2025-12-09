@@ -117,19 +117,25 @@ Note: Testing requires Phase 5 (Function Declarations) to be completed.
 - For loops with GMP bounds (requires conversion to while loop with GMP comparisons)
 - Loop limit handling (LimitExceeded exception)
 
-=== Phase 5: Function Declarations
-Priority: High
+=== Phase 5: Function Declarations (IMPLEMENTED)
 
-1. *Function Declaration* (`FuncDeclOp`)
-   - Generate function signature with converted types
-   - Handle parameters and return types
-   - Convert body region
-   - Add context pointer parameter for globals access
+==== Implemented Patterns
+- `FuncDeclOp` -> `func.func` with converted types
+  - Skips primitive functions (erases them)
+  - Converts argument types via type converter
+  - Converts return type
+  - Uses `inlineRegionBefore` + `convertRegionTypes` for body
+- `CallOp` -> `emitc.call_opaque` (returns value)
+- `StmtCallOp` -> `emitc.call_opaque` (void, discards result)
+- `AtcOp` -> pass-through (type converter handles conversion)
 
-2. *Function Call* (`CallOp`, `StmtCallOp`)
-   - Convert argument types
-   - Handle return value
-   - Pass context pointer
+==== Type Materializations
+- Source/target materializations handle lvalue-to-value conversion
+- Generates `emitc.load` when converting `!emitc.lvalue<T>` to `T`
+
+==== Not Yet Implemented
+- Context pointer for global variable access (requires globals analysis)
+- Procedure return handling (void functions)
 
 === Phase 6: Data Structures
 Priority: Medium

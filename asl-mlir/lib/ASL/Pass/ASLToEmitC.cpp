@@ -122,7 +122,38 @@ public:
       return convertTupleType(type);
     });
 
-    // TODO: Add more ASL type conversions
+    // Add source materialization for converting back from converted types
+    addSourceMaterialization([](OpBuilder &builder, Type resultType,
+                                ValueRange inputs, Location loc) -> Value {
+      if (inputs.size() != 1)
+        return Value();
+      if (inputs[0].getType() == resultType)
+        return inputs[0];
+      // Handle lvalue to value conversion
+      if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(inputs[0].getType())) {
+        if (lvalueType.getValueType() == resultType) {
+          return builder.create<emitc::LoadOp>(loc, resultType, inputs[0]);
+        }
+      }
+      return Value();
+    });
+
+    // Add target materialization for converting to target types
+    addTargetMaterialization([](OpBuilder &builder, Type resultType,
+                                ValueRange inputs, Location loc,
+                                Type originalType) -> Value {
+      if (inputs.size() != 1)
+        return Value();
+      if (inputs[0].getType() == resultType)
+        return inputs[0];
+      // Handle lvalue to value conversion
+      if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(inputs[0].getType())) {
+        if (lvalueType.getValueType() == resultType) {
+          return builder.create<emitc::LoadOp>(loc, resultType, inputs[0]);
+        }
+      }
+      return Value();
+    });
   }
 
 private:
@@ -1605,6 +1636,162 @@ struct StmtRepeatOpLowering : public OpConversionPattern<asl::StmtRepeatOp> {
   }
 };
 
+//===----------------------------------------------------------------------===//
+// Phase 5: Function Declaration Lowering Patterns
+//===----------------------------------------------------------------------===//
+
+// Function declaration: asl.func -> func.func
+// This pattern converts the function signature and lets the dialect conversion
+// framework handle the body operations
+struct FuncDeclOpLowering : public OpConversionPattern<asl::FuncDeclOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::FuncDeclOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Skip primitive functions (they have no body to convert)
+    if (op.getPrimitive()) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    // Get function name
+    StringRef funcName = op.getName();
+
+    // Convert argument types
+    SmallVector<Type> argTypes;
+    for (auto typeAttr : op.getArgsTypes()) {
+      Type aslType = mlir::cast<TypeAttr>(typeAttr).getValue();
+      Type convertedType = getTypeConverter()->convertType(aslType);
+      if (!convertedType)
+        return rewriter.notifyMatchFailure(op, "failed to convert arg type");
+      argTypes.push_back(convertedType);
+    }
+
+    // Convert return type
+    SmallVector<Type> resultTypes;
+    if (auto aslRetType = op.getReturnType()) {
+      Type convertedRetType = getTypeConverter()->convertType(*aslRetType);
+      if (!convertedRetType)
+        return rewriter.notifyMatchFailure(op, "failed to convert return type");
+      resultTypes.push_back(convertedRetType);
+    }
+
+    // Create function type
+    auto funcType = FunctionType::get(context, argTypes, resultTypes);
+
+    // Create func.func operation
+    auto funcOp = rewriter.create<func::FuncOp>(loc, funcName, funcType);
+
+    // Convert function body using inlineRegionBefore to preserve operations
+    // The dialect conversion framework will then convert the operations in the
+    // region
+    Region &aslBody = op.getBody();
+    if (!aslBody.empty()) {
+      // Move the region to the new function
+      rewriter.inlineRegionBefore(aslBody, funcOp.getBody(),
+                                  funcOp.getBody().end());
+
+      // Update block argument types
+      // The type converter will handle block argument conversion
+      if (failed(rewriter.convertRegionTypes(&funcOp.getBody(),
+                                             *getTypeConverter()))) {
+        return failure();
+      }
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// Function call expression: asl.expr.call -> emitc.call_opaque or func.call
+struct CallOpLowering : public OpConversionPattern<asl::CallOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::CallOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    // Convert result type
+    Type convertedType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedType)
+      return failure();
+
+    // Get function name
+    StringRef funcName = op.getName();
+
+    // Create call using emitc.call_opaque for now
+    // This allows calling external C functions as well as converted functions
+    auto callOp = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{convertedType}, funcName, adaptor.getArgs(), nullptr,
+        nullptr);
+
+    rewriter.replaceOp(op, callOp.getResult(0));
+    return success();
+  }
+};
+
+// Procedure call statement: asl.stmt.call -> emitc.call_opaque (void)
+struct StmtCallOpLowering : public OpConversionPattern<asl::StmtCallOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::StmtCallOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    // Get procedure name
+    StringRef procName = op.getName();
+
+    // Create void call using emitc.call_opaque
+    rewriter.create<emitc::CallOpaqueOp>(loc, TypeRange{}, procName,
+                                         adaptor.getArgs(), nullptr, nullptr);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Type Conversion (ATC) Lowering Patterns
+//===----------------------------------------------------------------------===//
+
+// Generic ATC: just pass through the value with type conversion
+struct AtcOpLowering : public OpConversionPattern<asl::AtcOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::AtcOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // ATC is essentially a type assertion/conversion
+    // For now, just pass through the value - the type converter handles
+    // the actual type conversion
+    rewriter.replaceOp(op, adaptor.getExpr());
+    return success();
+  }
+};
+
+// VarOp: variable reference - convert to use the value directly
+struct VarOpLowering : public OpConversionPattern<asl::VarOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::VarOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // For local variables (within functions), the variable reference
+    // should have been replaced by the actual SSA value during function
+    // body conversion. For now, just fail - this pattern should not
+    // be reached for properly converted code.
+    return rewriter.notifyMatchFailure(
+        op, "VarOp should be resolved during function body conversion");
+  }
+};
+
 // Comparison operations for integers (using GMP)
 template <typename OpTy>
 struct IntCompareOpLowering : public OpConversionPattern<OpTy> {
@@ -1866,6 +2053,13 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
                  StmtUnreachableOpLowering, StmtForOpLowering,
                  StmtWhileOpLowering, StmtRepeatOpLowering>(typeConverter,
                                                             context);
+
+    // Add function declaration patterns (Phase 5)
+    patterns.add<FuncDeclOpLowering, CallOpLowering, StmtCallOpLowering>(
+        typeConverter, context);
+
+    // Add type conversion patterns (ATC)
+    patterns.add<AtcOpLowering>(typeConverter, context);
 
     // Collect type declarations before conversion for typedef generation
     SmallVector<asl::TypeDeclOp> typeDecls;
