@@ -1,0 +1,10 @@
+*.log
+build/
+.clangd/
+.cache/
+.vscode/
+.idea/
+cmake-build-debug/
+cmake-build-release/
+
+compile_commands.json
