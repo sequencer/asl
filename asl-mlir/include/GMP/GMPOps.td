@@ -1221,8 +1221,8 @@ def GMP_QConstantOp : GMP_Op<"q.constant", [Pure, ConstantLike]> {
 
     Example:
     ```mlir
-    %half = gmp.q.constant #gmp.q<"1", "2">
-    %inf = gmp.q.constant #gmp.q<"1", "0">  // +infinity
+    %half = gmp.q.constant #gmp.q<1, 2>
+    %inf = gmp.q.constant #gmp.q<1, 0>  // +infinity
     ```
   }];
 
@@ -1236,6 +1236,531 @@ def GMP_QConstantOp : GMP_Op<"q.constant", [Pure, ConstantLike]> {
       build($_builder, $_state, $_builder.getType<QType>(), value);
     }]>
   ];
+
+  let hasFolder = 1;
+}
+
+def GMP_QMakeOp : GMP_Op<"q.make", [Pure]> {
+  let summary = "Construct a rational from numerator and denominator";
+  let description = [{
+    Creates a rational number from a numerator and denominator.
+    The result is automatically canonicalized (reduced to lowest terms,
+    denominator made positive).
+
+    Example:
+    ```mlir
+    %q = gmp.q.make %num, %den
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$numerator, GMP_ZType:$denominator);
+  let results = (outs GMP_QType:$result);
+
+  let assemblyFormat = "$numerator `,` $denominator attr-dict";
+
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Q Component Accessors
+//===----------------------------------------------------------------------===//
+
+def GMP_QNumOp : GMP_Op<"q.num", [Pure]> {
+  let summary = "Get the numerator of a rational";
+  let description = [{
+    Returns the numerator of the rational number.
+
+    Example:
+    ```mlir
+    %num = gmp.q.num %q
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$operand);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_QDenOp : GMP_Op<"q.den", [Pure]> {
+  let summary = "Get the denominator of a rational";
+  let description = [{
+    Returns the denominator of the rational number.
+
+    Example:
+    ```mlir
+    %den = gmp.q.den %q
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$operand);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Q Basic Arithmetic Operations
+//===----------------------------------------------------------------------===//
+
+def GMP_QAddOp : GMP_Op<"q.add", [Pure, Commutative]> {
+  let summary = "Add two rationals";
+  let description = [{
+    Computes the sum of two rational numbers.
+    The result is automatically canonicalized.
+
+    Example:
+    ```mlir
+    %sum = gmp.q.add %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$lhs, GMP_QType:$rhs);
+  let results = (outs GMP_QType:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_QSubOp : GMP_Op<"q.sub", [Pure]> {
+  let summary = "Subtract two rationals";
+  let description = [{
+    Computes the difference of two rational numbers (lhs - rhs).
+    The result is automatically canonicalized.
+
+    Example:
+    ```mlir
+    %diff = gmp.q.sub %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$lhs, GMP_QType:$rhs);
+  let results = (outs GMP_QType:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_QMulOp : GMP_Op<"q.mul", [Pure, Commutative]> {
+  let summary = "Multiply two rationals";
+  let description = [{
+    Computes the product of two rational numbers.
+    The result is automatically canonicalized.
+
+    Example:
+    ```mlir
+    %prod = gmp.q.mul %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$lhs, GMP_QType:$rhs);
+  let results = (outs GMP_QType:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_QDivOp : GMP_Op<"q.div", [Pure]> {
+  let summary = "Divide two rationals";
+  let description = [{
+    Computes the quotient of two rational numbers (lhs / rhs).
+    The result is automatically canonicalized.
+
+    Example:
+    ```mlir
+    %quot = gmp.q.div %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$lhs, GMP_QType:$rhs);
+  let results = (outs GMP_QType:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Q Unary Operations
+//===----------------------------------------------------------------------===//
+
+def GMP_QNegOp : GMP_Op<"q.neg", [Pure]> {
+  let summary = "Negate a rational";
+  let description = [{
+    Computes the negation of a rational number (-q).
+
+    Example:
+    ```mlir
+    %neg = gmp.q.neg %q
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$operand);
+  let results = (outs GMP_QType:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_QAbsOp : GMP_Op<"q.abs", [Pure]> {
+  let summary = "Absolute value of a rational";
+  let description = [{
+    Computes the absolute value of a rational number.
+
+    Example:
+    ```mlir
+    %abs = gmp.q.abs %q
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$operand);
+  let results = (outs GMP_QType:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_QInvOp : GMP_Op<"q.inv", [Pure]> {
+  let summary = "Multiplicative inverse of a rational";
+  let description = [{
+    Computes the multiplicative inverse (reciprocal) of a rational number.
+    inv(a/b) = b/a
+
+    Example:
+    ```mlir
+    %inv = gmp.q.inv %q
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$operand);
+  let results = (outs GMP_QType:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Q Comparison Operations
+//===----------------------------------------------------------------------===//
+
+def GMP_QCompareOp : GMP_Op<"q.compare", [Pure]> {
+  let summary = "Three-way comparison of rationals";
+  let description = [{
+    Compares two rationals and returns:
+    - negative value if lhs < rhs
+    - zero if lhs == rhs
+    - positive value if lhs > rhs
+
+    Example:
+    ```mlir
+    %cmp = gmp.q.compare %a, %b : i32
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$lhs, GMP_QType:$rhs);
+  let results = (outs I32:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_QEqualOp : GMP_Op<"q.equal", [Pure, Commutative]> {
+  let summary = "Test equality of rationals";
+  let description = [{
+    Returns true if lhs equals rhs.
+
+    Example:
+    ```mlir
+    %eq = gmp.q.equal %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$lhs, GMP_QType:$rhs);
+  let results = (outs I1:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_QLtOp : GMP_Op<"q.lt", [Pure]> {
+  let summary = "Test if lhs is less than rhs";
+  let description = [{
+    Returns true if lhs < rhs.
+
+    Example:
+    ```mlir
+    %lt = gmp.q.lt %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$lhs, GMP_QType:$rhs);
+  let results = (outs I1:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_QLeqOp : GMP_Op<"q.leq", [Pure]> {
+  let summary = "Test if lhs is less than or equal to rhs";
+  let description = [{
+    Returns true if lhs <= rhs.
+
+    Example:
+    ```mlir
+    %leq = gmp.q.leq %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$lhs, GMP_QType:$rhs);
+  let results = (outs I1:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_QGtOp : GMP_Op<"q.gt", [Pure]> {
+  let summary = "Test if lhs is greater than rhs";
+  let description = [{
+    Returns true if lhs > rhs.
+
+    Example:
+    ```mlir
+    %gt = gmp.q.gt %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$lhs, GMP_QType:$rhs);
+  let results = (outs I1:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_QGeqOp : GMP_Op<"q.geq", [Pure]> {
+  let summary = "Test if lhs is greater than or equal to rhs";
+  let description = [{
+    Returns true if lhs >= rhs.
+
+    Example:
+    ```mlir
+    %geq = gmp.q.geq %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$lhs, GMP_QType:$rhs);
+  let results = (outs I1:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Q Classification Operations
+//===----------------------------------------------------------------------===//
+
+def GMP_QClassifyOp : GMP_Op<"q.classify", [Pure]> {
+  let summary = "Classify a rational value";
+  let description = [{
+    Classifies a rational value and returns:
+    - 0: Real (finite) number
+    - 1: Positive infinity
+    - 2: Negative infinity
+    - 3: Undefined (0/0)
+
+    Example:
+    ```mlir
+    %class = gmp.q.classify %q : i32
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$operand);
+  let results = (outs I32:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_QIsRealOp : GMP_Op<"q.is_real", [Pure]> {
+  let summary = "Test if rational is a real (finite) number";
+  let description = [{
+    Returns true if the rational is a real (finite) number,
+    false if it is infinity or undefined.
+
+    Example:
+    ```mlir
+    %is_real = gmp.q.is_real %q
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$operand);
+  let results = (outs I1:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Q Rounding Operations
+//===----------------------------------------------------------------------===//
+
+def GMP_QFloorOp : GMP_Op<"q.floor", [Pure]> {
+  let summary = "Floor of a rational (round toward negative infinity)";
+  let description = [{
+    Returns the largest integer not greater than the rational.
+    This is the floor function: floor(3/2) = 1, floor(-3/2) = -2.
+
+    Example:
+    ```mlir
+    %floor = gmp.q.floor %q
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$operand);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_QCeilOp : GMP_Op<"q.ceil", [Pure]> {
+  let summary = "Ceiling of a rational (round toward positive infinity)";
+  let description = [{
+    Returns the smallest integer not less than the rational.
+    This is the ceiling function: ceil(3/2) = 2, ceil(-3/2) = -1.
+
+    Example:
+    ```mlir
+    %ceil = gmp.q.ceil %q
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$operand);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_QTruncOp : GMP_Op<"q.trunc", [Pure]> {
+  let summary = "Truncate a rational (round toward zero)";
+  let description = [{
+    Returns the integer part of the rational, rounding toward zero.
+    trunc(3/2) = 1, trunc(-3/2) = -1.
+
+    Example:
+    ```mlir
+    %trunc = gmp.q.trunc %q
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$operand);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_QRoundOp : GMP_Op<"q.round", [Pure]> {
+  let summary = "Round a rational to nearest integer";
+  let description = [{
+    Rounds to the nearest integer. For values exactly halfway between
+    two integers, rounds away from zero (banker's rounding variant).
+    round(3/2) = 2, round(-3/2) = -2, round(5/2) = 3.
+
+    Example:
+    ```mlir
+    %round = gmp.q.round %q
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$operand);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Q Conversion Operations
+//===----------------------------------------------------------------------===//
+
+def GMP_QToBigIntOp : GMP_Op<"q.to_bigint", [Pure]> {
+  let summary = "Convert rational to integer (truncating)";
+  let description = [{
+    Converts a rational to an integer by truncating toward zero.
+    Equivalent to gmp.q.trunc but with explicit conversion semantics.
+
+    Example:
+    ```mlir
+    %z = gmp.q.to_bigint %q
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$operand);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_QToF64Op : GMP_Op<"q.to_f64", [Pure]> {
+  let summary = "Convert rational to double precision float";
+  let description = [{
+    Converts a rational to a 64-bit floating point number.
+    The conversion may lose precision.
+
+    Example:
+    ```mlir
+    %f = gmp.q.to_f64 %q
+    ```
+  }];
+
+  let arguments = (ins GMP_QType:$operand);
+  let results = (outs F64:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_QFromZOp : GMP_Op<"q.from_z", [Pure]> {
+  let summary = "Convert integer to rational";
+  let description = [{
+    Converts an arbitrary precision integer to a rational with denominator 1.
+
+    Example:
+    ```mlir
+    %q = gmp.q.from_z %z
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$operand);
+  let results = (outs GMP_QType:$result);
+
+  let assemblyFormat = "$operand attr-dict";
 
   let hasFolder = 1;
 }

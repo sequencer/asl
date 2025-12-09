@@ -13,7 +13,9 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OpImplementation.h"
 #include "llvm/ADT/SmallString.h"
+#include <cmath>
 #include <gmp.h>
+#include <limits>
 
 using namespace mlir;
 using namespace mlir::gmp;
@@ -1024,16 +1026,16 @@ OpFoldResult ZGcdOp::fold(FoldAdaptor adaptor) {
   // gcd(x, 0) -> |x|
   if (rhsAttr && rhsAttr.isZero())
     return ZAttr::get(getContext(),
-                      lhsAttr ? (lhsAttr.isNegative()
-                                    ? lhsAttr.getValue().substr(1)
-                                    : lhsAttr.getValue())
-                              : "0");
+                      lhsAttr
+                          ? (lhsAttr.isNegative() ? lhsAttr.getValue().substr(1)
+                                                  : lhsAttr.getValue())
+                          : "0");
   if (lhsAttr && lhsAttr.isZero())
     return ZAttr::get(getContext(),
-                      rhsAttr ? (rhsAttr.isNegative()
-                                    ? rhsAttr.getValue().substr(1)
-                                    : rhsAttr.getValue())
-                              : "0");
+                      rhsAttr
+                          ? (rhsAttr.isNegative() ? rhsAttr.getValue().substr(1)
+                                                  : rhsAttr.getValue())
+                          : "0");
 
   // gcd(x, x) -> |x|
   if (getLhs() == getRhs())
@@ -1364,12 +1366,593 @@ OpFoldResult ZFibOp::fold(FoldAdaptor adaptor) {
 }
 
 //===----------------------------------------------------------------------===//
+// Q Module Operations
+//===----------------------------------------------------------------------===//
+
+namespace {
+/// RAII wrapper for mpq_t to ensure proper initialization and cleanup.
+class MPQValue {
+public:
+  MPQValue() { mpq_init(value); }
+  MPQValue(const std::string &num, const std::string &den) {
+    mpq_init(value);
+    mpz_set_str(mpq_numref(value), num.c_str(), 10);
+    mpz_set_str(mpq_denref(value), den.c_str(), 10);
+    // Canonicalize - but only if denominator is not zero
+    if (mpz_sgn(mpq_denref(value)) != 0)
+      mpq_canonicalize(value);
+  }
+  ~MPQValue() { mpq_clear(value); }
+
+  // Non-copyable
+  MPQValue(const MPQValue &) = delete;
+  MPQValue &operator=(const MPQValue &) = delete;
+
+  mpq_t &get() { return value; }
+  const mpq_t &get() const { return value; }
+
+  std::string numToString() const {
+    char *str = mpz_get_str(nullptr, 10, mpq_numref(value));
+    std::string result(str);
+    free(str);
+    return result;
+  }
+
+  std::string denToString() const {
+    char *str = mpz_get_str(nullptr, 10, mpq_denref(value));
+    std::string result(str);
+    free(str);
+    return result;
+  }
+
+  bool isZero() const {
+    return mpz_sgn(mpq_numref(value)) == 0 &&
+           mpz_sgn(mpq_denref(value)) != 0;
+  }
+
+  bool isPosInf() const {
+    return mpz_sgn(mpq_numref(value)) > 0 &&
+           mpz_sgn(mpq_denref(value)) == 0;
+  }
+
+  bool isNegInf() const {
+    return mpz_sgn(mpq_numref(value)) < 0 &&
+           mpz_sgn(mpq_denref(value)) == 0;
+  }
+
+  bool isUndef() const {
+    return mpz_sgn(mpq_numref(value)) == 0 &&
+           mpz_sgn(mpq_denref(value)) == 0;
+  }
+
+  bool isReal() const { return mpz_sgn(mpq_denref(value)) != 0; }
+
+private:
+  mpq_t value;
+};
+} // namespace
+
+/// Helper to create a QAttr from an MPQValue
+static QAttr createQAttr(MLIRContext *ctx, const MPQValue &val) {
+  return QAttr::get(ctx, val.numToString(), val.denToString());
+}
+
+//===----------------------------------------------------------------------===//
 // QConstantOp
 //===----------------------------------------------------------------------===//
 
 OpFoldResult QConstantOp::fold(FoldAdaptor adaptor) {
   // Return the constant value for use by other operations' fold methods.
   return getValue();
+}
+
+//===----------------------------------------------------------------------===//
+// QMakeOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QMakeOp::fold(FoldAdaptor adaptor) {
+  auto numAttr = dyn_cast_or_null<ZAttr>(adaptor.getNumerator());
+  auto denAttr = dyn_cast_or_null<ZAttr>(adaptor.getDenominator());
+
+  if (numAttr && denAttr) {
+    MPQValue result(numAttr.getValue(), denAttr.getValue());
+    return createQAttr(getContext(), result);
+  }
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QNumOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QNumOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<QAttr>(adaptor.getOperand())) {
+    return ZAttr::get(getContext(), attr.getNumerator());
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QDenOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QDenOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<QAttr>(adaptor.getOperand())) {
+    return ZAttr::get(getContext(), attr.getDenominator());
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QAddOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QAddOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<QAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<QAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr && lhsAttr.isReal() && rhsAttr.isReal()) {
+    MPQValue lhs(lhsAttr.getNumerator(), lhsAttr.getDenominator());
+    MPQValue rhs(rhsAttr.getNumerator(), rhsAttr.getDenominator());
+    MPQValue result;
+    mpq_add(result.get(), lhs.get(), rhs.get());
+    return createQAttr(getContext(), result);
+  }
+
+  // q + 0 -> q
+  if (rhsAttr && rhsAttr.isZero())
+    return getLhs();
+  if (lhsAttr && lhsAttr.isZero())
+    return getRhs();
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QSubOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QSubOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<QAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<QAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr && lhsAttr.isReal() && rhsAttr.isReal()) {
+    MPQValue lhs(lhsAttr.getNumerator(), lhsAttr.getDenominator());
+    MPQValue rhs(rhsAttr.getNumerator(), rhsAttr.getDenominator());
+    MPQValue result;
+    mpq_sub(result.get(), lhs.get(), rhs.get());
+    return createQAttr(getContext(), result);
+  }
+
+  // q - 0 -> q
+  if (rhsAttr && rhsAttr.isZero())
+    return getLhs();
+
+  // q - q -> 0
+  if (getLhs() == getRhs())
+    return QAttr::get(getContext(), "0", "1");
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QMulOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QMulOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<QAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<QAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr && lhsAttr.isReal() && rhsAttr.isReal()) {
+    MPQValue lhs(lhsAttr.getNumerator(), lhsAttr.getDenominator());
+    MPQValue rhs(rhsAttr.getNumerator(), rhsAttr.getDenominator());
+    MPQValue result;
+    mpq_mul(result.get(), lhs.get(), rhs.get());
+    return createQAttr(getContext(), result);
+  }
+
+  // q * 0 -> 0 (for real q)
+  if (lhsAttr && lhsAttr.isReal() && rhsAttr && rhsAttr.isZero())
+    return rhsAttr;
+  if (rhsAttr && rhsAttr.isReal() && lhsAttr && lhsAttr.isZero())
+    return lhsAttr;
+
+  // q * 1 -> q
+  if (rhsAttr && rhsAttr.getNumerator() == "1" && rhsAttr.getDenominator() == "1")
+    return getLhs();
+  if (lhsAttr && lhsAttr.getNumerator() == "1" && lhsAttr.getDenominator() == "1")
+    return getRhs();
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QDivOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QDivOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<QAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<QAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr && lhsAttr.isReal() && rhsAttr.isReal() &&
+      !rhsAttr.isZero()) {
+    MPQValue lhs(lhsAttr.getNumerator(), lhsAttr.getDenominator());
+    MPQValue rhs(rhsAttr.getNumerator(), rhsAttr.getDenominator());
+    MPQValue result;
+    mpq_div(result.get(), lhs.get(), rhs.get());
+    return createQAttr(getContext(), result);
+  }
+
+  // q / 1 -> q
+  if (rhsAttr && rhsAttr.getNumerator() == "1" && rhsAttr.getDenominator() == "1")
+    return getLhs();
+
+  // 0 / q -> 0 (for non-zero real q)
+  if (lhsAttr && lhsAttr.isZero() && rhsAttr && rhsAttr.isReal() &&
+      !rhsAttr.isZero())
+    return lhsAttr;
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QNegOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QNegOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<QAttr>(adaptor.getOperand())) {
+    if (attr.isReal()) {
+      MPQValue val(attr.getNumerator(), attr.getDenominator());
+      MPQValue result;
+      mpq_neg(result.get(), val.get());
+      return createQAttr(getContext(), result);
+    }
+    // Handle special values: neg(+inf) = -inf, neg(-inf) = +inf
+    if (attr.isPosInf())
+      return QAttr::get(getContext(), "-1", "0");
+    if (attr.isNegInf())
+      return QAttr::get(getContext(), "1", "0");
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QAbsOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QAbsOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<QAttr>(adaptor.getOperand())) {
+    if (attr.isReal()) {
+      MPQValue val(attr.getNumerator(), attr.getDenominator());
+      MPQValue result;
+      mpq_abs(result.get(), val.get());
+      return createQAttr(getContext(), result);
+    }
+    // abs(+inf) = abs(-inf) = +inf
+    if (attr.isPosInf() || attr.isNegInf())
+      return QAttr::get(getContext(), "1", "0");
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QInvOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QInvOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<QAttr>(adaptor.getOperand())) {
+    if (attr.isReal() && !attr.isZero()) {
+      MPQValue val(attr.getNumerator(), attr.getDenominator());
+      MPQValue result;
+      mpq_inv(result.get(), val.get());
+      return createQAttr(getContext(), result);
+    }
+    // inv(0) = +inf
+    if (attr.isZero())
+      return QAttr::get(getContext(), "1", "0");
+    // inv(+inf) = inv(-inf) = 0
+    if (attr.isPosInf() || attr.isNegInf())
+      return QAttr::get(getContext(), "0", "1");
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QCompareOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QCompareOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<QAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<QAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr && lhsAttr.isReal() && rhsAttr.isReal()) {
+    MPQValue lhs(lhsAttr.getNumerator(), lhsAttr.getDenominator());
+    MPQValue rhs(rhsAttr.getNumerator(), rhsAttr.getDenominator());
+    int cmp = mpq_cmp(lhs.get(), rhs.get());
+    int32_t result = (cmp > 0) ? 1 : (cmp < 0) ? -1 : 0;
+    return IntegerAttr::get(IntegerType::get(getContext(), 32), result);
+  }
+
+  // q compare q -> 0
+  if (getLhs() == getRhs())
+    return IntegerAttr::get(IntegerType::get(getContext(), 32), 0);
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QEqualOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QEqualOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<QAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<QAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr && lhsAttr.isReal() && rhsAttr.isReal()) {
+    MPQValue lhs(lhsAttr.getNumerator(), lhsAttr.getDenominator());
+    MPQValue rhs(rhsAttr.getNumerator(), rhsAttr.getDenominator());
+    bool equal = mpq_equal(lhs.get(), rhs.get()) != 0;
+    return BoolAttr::get(getContext(), equal);
+  }
+
+  // q == q -> true
+  if (getLhs() == getRhs())
+    return BoolAttr::get(getContext(), true);
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QLtOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QLtOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<QAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<QAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr && lhsAttr.isReal() && rhsAttr.isReal()) {
+    MPQValue lhs(lhsAttr.getNumerator(), lhsAttr.getDenominator());
+    MPQValue rhs(rhsAttr.getNumerator(), rhsAttr.getDenominator());
+    bool lt = mpq_cmp(lhs.get(), rhs.get()) < 0;
+    return BoolAttr::get(getContext(), lt);
+  }
+
+  // q < q -> false
+  if (getLhs() == getRhs())
+    return BoolAttr::get(getContext(), false);
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QLeqOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QLeqOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<QAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<QAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr && lhsAttr.isReal() && rhsAttr.isReal()) {
+    MPQValue lhs(lhsAttr.getNumerator(), lhsAttr.getDenominator());
+    MPQValue rhs(rhsAttr.getNumerator(), rhsAttr.getDenominator());
+    bool leq = mpq_cmp(lhs.get(), rhs.get()) <= 0;
+    return BoolAttr::get(getContext(), leq);
+  }
+
+  // q <= q -> true
+  if (getLhs() == getRhs())
+    return BoolAttr::get(getContext(), true);
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QGtOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QGtOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<QAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<QAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr && lhsAttr.isReal() && rhsAttr.isReal()) {
+    MPQValue lhs(lhsAttr.getNumerator(), lhsAttr.getDenominator());
+    MPQValue rhs(rhsAttr.getNumerator(), rhsAttr.getDenominator());
+    bool gt = mpq_cmp(lhs.get(), rhs.get()) > 0;
+    return BoolAttr::get(getContext(), gt);
+  }
+
+  // q > q -> false
+  if (getLhs() == getRhs())
+    return BoolAttr::get(getContext(), false);
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QGeqOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QGeqOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<QAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<QAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr && lhsAttr.isReal() && rhsAttr.isReal()) {
+    MPQValue lhs(lhsAttr.getNumerator(), lhsAttr.getDenominator());
+    MPQValue rhs(rhsAttr.getNumerator(), rhsAttr.getDenominator());
+    bool geq = mpq_cmp(lhs.get(), rhs.get()) >= 0;
+    return BoolAttr::get(getContext(), geq);
+  }
+
+  // q >= q -> true
+  if (getLhs() == getRhs())
+    return BoolAttr::get(getContext(), true);
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QClassifyOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QClassifyOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<QAttr>(adaptor.getOperand())) {
+    int32_t result;
+    if (attr.isReal())
+      result = 0; // Real
+    else if (attr.isPosInf())
+      result = 1; // +Inf
+    else if (attr.isNegInf())
+      result = 2; // -Inf
+    else
+      result = 3; // Undef
+    return IntegerAttr::get(IntegerType::get(getContext(), 32), result);
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QIsRealOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QIsRealOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<QAttr>(adaptor.getOperand())) {
+    return BoolAttr::get(getContext(), attr.isReal());
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QFloorOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QFloorOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<QAttr>(adaptor.getOperand())) {
+    if (attr.isReal()) {
+      MPZValue num(attr.getNumerator());
+      MPZValue den(attr.getDenominator());
+      MPZValue result;
+      mpz_fdiv_q(result.get(), num.get(), den.get());
+      return ZAttr::get(getContext(), result.toString());
+    }
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QCeilOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QCeilOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<QAttr>(adaptor.getOperand())) {
+    if (attr.isReal()) {
+      MPZValue num(attr.getNumerator());
+      MPZValue den(attr.getDenominator());
+      MPZValue result;
+      mpz_cdiv_q(result.get(), num.get(), den.get());
+      return ZAttr::get(getContext(), result.toString());
+    }
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QTruncOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QTruncOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<QAttr>(adaptor.getOperand())) {
+    if (attr.isReal()) {
+      MPZValue num(attr.getNumerator());
+      MPZValue den(attr.getDenominator());
+      MPZValue result;
+      mpz_tdiv_q(result.get(), num.get(), den.get());
+      return ZAttr::get(getContext(), result.toString());
+    }
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QRoundOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QRoundOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<QAttr>(adaptor.getOperand())) {
+    if (attr.isReal()) {
+      MPZValue num(attr.getNumerator());
+      MPZValue den(attr.getDenominator());
+
+      // Round away from zero for halfway cases
+      // result = floor((num + sign(num) * den/2) / den)
+      MPZValue halfDen, adjustedNum, result;
+      mpz_fdiv_q_ui(halfDen.get(), den.get(), 2);
+
+      if (mpz_sgn(num.get()) >= 0) {
+        mpz_add(adjustedNum.get(), num.get(), halfDen.get());
+      } else {
+        mpz_sub(adjustedNum.get(), num.get(), halfDen.get());
+      }
+      mpz_tdiv_q(result.get(), adjustedNum.get(), den.get());
+      return ZAttr::get(getContext(), result.toString());
+    }
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QToBigIntOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QToBigIntOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<QAttr>(adaptor.getOperand())) {
+    if (attr.isReal()) {
+      MPZValue num(attr.getNumerator());
+      MPZValue den(attr.getDenominator());
+      MPZValue result;
+      mpz_tdiv_q(result.get(), num.get(), den.get());
+      return ZAttr::get(getContext(), result.toString());
+    }
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QToF64Op
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QToF64Op::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<QAttr>(adaptor.getOperand())) {
+    if (attr.isReal()) {
+      MPQValue val(attr.getNumerator(), attr.getDenominator());
+      double result = mpq_get_d(val.get());
+      return FloatAttr::get(Float64Type::get(getContext()), result);
+    }
+    // +inf -> infinity
+    if (attr.isPosInf())
+      return FloatAttr::get(Float64Type::get(getContext()),
+                            std::numeric_limits<double>::infinity());
+    // -inf -> -infinity
+    if (attr.isNegInf())
+      return FloatAttr::get(Float64Type::get(getContext()),
+                            -std::numeric_limits<double>::infinity());
+    // undef -> NaN
+    if (attr.isUndef())
+      return FloatAttr::get(Float64Type::get(getContext()),
+                            std::numeric_limits<double>::quiet_NaN());
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QFromZOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult QFromZOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<ZAttr>(adaptor.getOperand())) {
+    return QAttr::get(getContext(), attr.getValue(), "1");
+  }
+  return {};
 }
 
 #define GET_OP_CLASSES
