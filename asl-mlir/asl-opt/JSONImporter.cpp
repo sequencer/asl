@@ -1366,16 +1366,16 @@ struct JSONImporter {
           BUILD_BIN(BinopShrOp, intTy);
         }
         if (bop == "AND") {
-          // Bitwise AND is defined over bitvectors; result must be BitsType.
-          BUILD_BIN(BinopAndOp, getDefaultBitsType());
+          // Bitwise AND: result type inherits from operands
+          BUILD_BIN(BinopAndOp, lhsTy);
         }
         if (bop == "OR") {
-          // Bitwise OR is defined over bitvectors; result must be BitsType.
-          BUILD_BIN(BinopOrOp, getDefaultBitsType());
+          // Bitwise OR: result type inherits from operands
+          BUILD_BIN(BinopOrOp, lhsTy);
         }
         if (bop == "XOR") {
-          // Bitwise XOR is defined over bitvectors; result must be BitsType.
-          BUILD_BIN(BinopXorOp, getDefaultBitsType());
+          // Bitwise XOR: result type inherits from operands
+          BUILD_BIN(BinopXorOp, lhsTy);
         }
         if (bop == "BAND") {
           BUILD_BIN(BinopBandOp, builder.getI1Type());

@@ -1,5 +1,5 @@
 // RUN: asl-json-backend --no-std %s > %t.json
-// RUN: asl-opt --canonicalize --run-asl-to-emitc --emitc --json-input %t.json | FileCheck %s
+// RUN: asl-opt --json-canonicalize --run-asl-to-emitc --emitc --json-input %t.json | FileCheck %s
 
 // CHECK: #include <gmp.h>
 // CHECK: #include <stdint.h>
@@ -20,9 +20,10 @@
 // CHECK:   mpz_t Int_init;
 // CHECK:   mpq_t Real;
 // CHECK:   mpq_t RealPi_init;
-// CHECK:   bool Bool_init;
+// CHECK:   bool Bool;
 // CHECK:   bool BoolT_init;
-// CHECK:   const char* message;
+// CHECK:   const char* String;
+// CHECK:   const char* String_init;
 // CHECK: } asl_context;
 var Bits1 : bits(1);
 var Bits9 : bits(9);
@@ -83,8 +84,8 @@ var RealPi_init : real = 3.14;
 // TODO: real folding
 // var RealMinusOne_init : real = -1.0;
 
-// CHECK: static inline void asl_init_Bool_init(asl_context* ctx) {
-// CHECK:   ctx->Bool_init = false;
+// CHECK: static inline void asl_init_Bool(asl_context* ctx) {
+// CHECK:   ctx->Bool = false;
 // CHECK: }
 var Bool : boolean;
 

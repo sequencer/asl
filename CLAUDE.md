@@ -136,23 +136,49 @@ When using network search:
 
 ## Build System
 
-This project uses Nix for development. Enter the development shell with, if command is not found in nix, add it to flake dependency:
+This project uses Nix for development. Enter the development shell with:
 ```bash
 nix develop
 ```
 
-### Building asl-mlir
+If a command is not found in nix, add it to flake dependency.
 
-Build via Nix, you can enter the nix develop environment to build it locally via `cmake` and `ninja`:
+### Available Nix Packages
+
+The following packages are defined in `nix/overlay.nix`:
+- `herdtools7` - ARM herdtools7 (ASL reference implementation)
+- `asl-json-backend` - JSON backend for ASL frontend
+- `asl-mlir` - MLIR-based ASL compiler (main package)
+- `asl-llvm` / `circt-llvm` - LLVM dependencies
+
+### Building Packages
+
+Build specific packages:
 ```bash
-nix build .#asl-mlir
+nix build .#asl-mlir        # Build asl-mlir
+nix build .#asl-json-backend # Build JSON backend
+nix build .#herdtools7       # Build herdtools7
 ```
 
-### Running tests
+For local development with cmake/ninja:
+```bash
+nix develop
+cd asl-mlir
+mkdir -p build && cd build
+cmake .. -G Ninja
+ninja
+```
 
-you can enter the nix develop environment to run ninja(assume build in `asl-mlir/build`)
+### Running Tests
+
+Within the nix develop environment (assumes build in `asl-mlir/build`):
 ```bash
 ninja -C asl-mlir/build check-asl-opt
+```
+
+Run a specific test file:
+```bash
+nix develop -c bash -c "cd asl-mlir/build && ./bin/llvm-lit ../test/Passes/BaseTypeLowering.asl -v"
 ```
 
 Tests use LLVM's `lit` test runner. Test files are `.asl` or `.mlir` files with `// RUN:` directives. Tests are in `asl-mlir/test/`.
