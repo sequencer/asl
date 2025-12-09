@@ -223,6 +223,251 @@ def GMP_ZPredOp : GMP_Op<"z.pred", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// Z Division Operations
+//===----------------------------------------------------------------------===//
+
+def GMP_ZDivOp : GMP_Op<"z.div", [Pure]> {
+  let summary = "Truncated division of arbitrary precision integers";
+  let description = [{
+    Computes the quotient of lhs / rhs, truncated toward zero.
+    This is equivalent to GMP's mpz_tdiv_q.
+
+    Example:
+    ```mlir
+    %q = gmp.z.div %a, %b  // 7 / 3 = 2, -7 / 3 = -2
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZRemOp : GMP_Op<"z.rem", [Pure]> {
+  let summary = "Truncated remainder of arbitrary precision integers";
+  let description = [{
+    Computes the remainder of lhs / rhs, with sign matching the dividend.
+    This is equivalent to GMP's mpz_tdiv_r.
+
+    Example:
+    ```mlir
+    %r = gmp.z.rem %a, %b  // 7 % 3 = 1, -7 % 3 = -1
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZDivRemOp : GMP_Op<"z.div_rem", [Pure]> {
+  let summary = "Truncated division with quotient and remainder";
+  let description = [{
+    Computes both quotient and remainder of lhs / rhs, truncated toward zero.
+    Returns two results: quotient and remainder.
+
+    Example:
+    ```mlir
+    %q, %r = gmp.z.div_rem %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs GMP_ZType:$quotient, GMP_ZType:$remainder);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZFDivOp : GMP_Op<"z.fdiv", [Pure]> {
+  let summary = "Floor division of arbitrary precision integers";
+  let description = [{
+    Computes the quotient of lhs / rhs, rounded toward negative infinity.
+    This is equivalent to GMP's mpz_fdiv_q.
+
+    Example:
+    ```mlir
+    %q = gmp.z.fdiv %a, %b  // 7 / 3 = 2, -7 / 3 = -3
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZFRemOp : GMP_Op<"z.frem", [Pure]> {
+  let summary = "Floor remainder of arbitrary precision integers";
+  let description = [{
+    Computes the remainder after floor division, with sign matching the divisor.
+    This is equivalent to GMP's mpz_fdiv_r.
+
+    Example:
+    ```mlir
+    %r = gmp.z.frem %a, %b  // 7 % 3 = 1, -7 % 3 = 2
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZCDivOp : GMP_Op<"z.cdiv", [Pure]> {
+  let summary = "Ceiling division of arbitrary precision integers";
+  let description = [{
+    Computes the quotient of lhs / rhs, rounded toward positive infinity.
+    This is equivalent to GMP's mpz_cdiv_q.
+
+    Example:
+    ```mlir
+    %q = gmp.z.cdiv %a, %b  // 7 / 3 = 3, -7 / 3 = -2
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZCRemOp : GMP_Op<"z.crem", [Pure]> {
+  let summary = "Ceiling remainder of arbitrary precision integers";
+  let description = [{
+    Computes the remainder after ceiling division.
+    This is equivalent to GMP's mpz_cdiv_r.
+
+    Example:
+    ```mlir
+    %r = gmp.z.crem %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZEDivOp : GMP_Op<"z.ediv", [Pure]> {
+  let summary = "Euclidean division quotient";
+  let description = [{
+    Computes the Euclidean division quotient where the remainder is always
+    non-negative (0 <= r < |divisor|). This follows mathematical conventions.
+
+    Example:
+    ```mlir
+    %q = gmp.z.ediv %a, %b  // -7 ediv 3 = -3 (so -7 = -3*3 + 2)
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZERemOp : GMP_Op<"z.erem", [Pure]> {
+  let summary = "Euclidean division remainder (always non-negative)";
+  let description = [{
+    Computes the Euclidean remainder, which is always non-negative
+    (0 <= result < |divisor|). This follows mathematical conventions.
+
+    Example:
+    ```mlir
+    %r = gmp.z.erem %a, %b  // -7 erem 3 = 2
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZDivExactOp : GMP_Op<"z.divexact", [Pure]> {
+  let summary = "Exact division (assumes divisibility)";
+  let description = [{
+    Computes lhs / rhs assuming rhs divides lhs exactly. This is faster than
+    regular division but produces undefined results if the division is not exact.
+    This is equivalent to GMP's mpz_divexact.
+
+    Example:
+    ```mlir
+    %q = gmp.z.divexact %a, %b  // Only valid when b divides a exactly
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZDivisibleOp : GMP_Op<"z.divisible", [Pure]> {
+  let summary = "Test if one integer divides another";
+  let description = [{
+    Returns true (1) if rhs divides lhs exactly, false (0) otherwise.
+    This is equivalent to GMP's mpz_divisible_p.
+
+    Example:
+    ```mlir
+    %result = gmp.z.divisible %a, %b : i1  // true if b divides a
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs I1:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZCongruentOp : GMP_Op<"z.congruent", [Pure]> {
+  let summary = "Test if two integers are congruent modulo a third";
+  let description = [{
+    Returns true (1) if lhs ≡ rhs (mod modulus), false (0) otherwise.
+    This is equivalent to GMP's mpz_congruent_p.
+
+    Example:
+    ```mlir
+    %result = gmp.z.congruent %a, %b, %m : i1  // true if a ≡ b (mod m)
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs, GMP_ZType:$modulus);
+  let results = (outs I1:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs `,` $modulus attr-dict";
+
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // Q Module: Rational Operations
 //===----------------------------------------------------------------------===//
 
