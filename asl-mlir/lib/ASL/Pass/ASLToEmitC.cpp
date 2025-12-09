@@ -1334,6 +1334,277 @@ struct UnopNotOpLowering : public OpConversionPattern<asl::UnopNotOp> {
   }
 };
 
+//===----------------------------------------------------------------------===//
+// Phase 4: Control Flow Lowering Patterns
+//===----------------------------------------------------------------------===//
+
+// Conditional expression: condition ? then_expr : else_expr
+struct CondOpLowering : public OpConversionPattern<asl::CondOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::CondOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    Type convertedType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedType)
+      return failure();
+
+    // Use emitc.conditional for ternary operation
+    auto result = rewriter.create<emitc::ConditionalOp>(
+        loc, convertedType, adaptor.getCondition(), adaptor.getThenExpr(),
+        adaptor.getElseExpr());
+
+    rewriter.replaceOp(op, result.getResult());
+    return success();
+  }
+};
+
+// Pass statement: no-op, just erase
+struct StmtPassOpLowering : public OpConversionPattern<asl::StmtPassOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::StmtPassOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Pass is a no-op, just erase it
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// Return statement: func.return or emitc equivalent
+struct StmtReturnOpLowering : public OpConversionPattern<asl::StmtReturnOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::StmtReturnOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (adaptor.getValue()) {
+      // Return with value
+      rewriter.replaceOpWithNewOp<func::ReturnOp>(op, adaptor.getValue());
+    } else {
+      // Return without value
+      rewriter.replaceOpWithNewOp<func::ReturnOp>(op);
+    }
+    return success();
+  }
+};
+
+// Sequence statement: inline the body operations
+struct StmtSeqOpLowering : public OpConversionPattern<asl::StmtSeqOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::StmtSeqOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Inline the body region at the current position
+    Region &bodyRegion = op.getBody();
+    if (bodyRegion.empty()) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    // Move operations from body block to parent
+    Block &bodyBlock = bodyRegion.front();
+    rewriter.inlineBlockBefore(&bodyBlock, op);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// Conditional statement: if-then-else
+struct StmtCondOpLowering : public OpConversionPattern<asl::StmtCondOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::StmtCondOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    // Create scf.if with then/else regions
+    auto ifOp = rewriter.create<scf::IfOp>(loc, adaptor.getCondition(),
+                                           /*withElseRegion=*/true);
+
+    // Move the then block contents
+    Region &thenRegion = op.getBranches();
+    if (thenRegion.hasOneBlock()) {
+      Block &aslThenBlock = thenRegion.front();
+      rewriter.inlineBlockBefore(&aslThenBlock, &ifOp.getThenRegion().front(),
+                                 ifOp.getThenRegion().front().begin());
+    }
+
+    // Move the else block contents (second block in branches region)
+    if (thenRegion.getBlocks().size() > 1) {
+      Block &aslElseBlock = *std::next(thenRegion.begin());
+      rewriter.inlineBlockBefore(&aslElseBlock, &ifOp.getElseRegion().front(),
+                                 ifOp.getElseRegion().front().begin());
+    }
+
+    // Add scf.yield terminators if needed
+    for (Region *region : {&ifOp.getThenRegion(), &ifOp.getElseRegion()}) {
+      Block &block = region->front();
+      if (block.empty() || !block.back().hasTrait<OpTrait::IsTerminator>()) {
+        rewriter.setInsertionPointToEnd(&block);
+        rewriter.create<scf::YieldOp>(loc);
+      }
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// Assert statement: runtime assertion
+struct StmtAssertOpLowering : public OpConversionPattern<asl::StmtAssertOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::StmtAssertOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    // Generate assert() call
+    rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{}, "assert", ValueRange{adaptor.getCondition()}, nullptr,
+        nullptr);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// Unreachable statement: __builtin_unreachable()
+struct StmtUnreachableOpLowering
+    : public OpConversionPattern<asl::StmtUnreachableOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::StmtUnreachableOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    // Generate __builtin_unreachable() call
+    rewriter.create<emitc::CallOpaqueOp>(loc, TypeRange{},
+                                         "__builtin_unreachable", ValueRange{},
+                                         nullptr, nullptr);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// For loop: for index = start to/downto end [limit L] do body
+// Loops with GMP bounds are complex - for now, emit a warning and fail
+// A full implementation would use while loops with GMP comparisons
+struct StmtForOpLowering : public OpConversionPattern<asl::StmtForOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::StmtForOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // For loops with GMP integer bounds require complex lowering
+    // For now, fail with a clear message - this needs a dedicated lowering
+    // that converts GMP integers to native types for loop control
+    return rewriter.notifyMatchFailure(
+        op, "for loops with GMP integer bounds not yet supported - "
+            "requires conversion to while loop with GMP comparisons");
+  }
+};
+
+// While loop: while condition [limit L] do body
+struct StmtWhileOpLowering : public OpConversionPattern<asl::StmtWhileOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::StmtWhileOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    // Check if limit is specified - if so, we need special handling
+    if (adaptor.getLimit()) {
+      return rewriter.notifyMatchFailure(
+          op, "while loops with limit not yet supported");
+    }
+
+    // Create scf.while operation
+    // The condition is evaluated before each iteration
+    auto whileOp = rewriter.create<scf::WhileOp>(loc, TypeRange{}, ValueRange{});
+
+    // Set up the "before" region (condition check)
+    Block *beforeBlock = rewriter.createBlock(&whileOp.getBefore());
+    rewriter.setInsertionPointToEnd(beforeBlock);
+    rewriter.create<scf::ConditionOp>(loc, adaptor.getCondition(), ValueRange{});
+
+    // Set up the "after" region (body)
+    Block *afterBlock = rewriter.createBlock(&whileOp.getAfter());
+
+    // Move the body operations
+    Region &bodyRegion = op.getBody();
+    if (!bodyRegion.empty()) {
+      Block &bodyBlock = bodyRegion.front();
+      rewriter.inlineBlockBefore(&bodyBlock, afterBlock, afterBlock->begin());
+    }
+
+    // Add yield at end of after block
+    rewriter.setInsertionPointToEnd(afterBlock);
+    rewriter.create<scf::YieldOp>(loc);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// Repeat-until loop: repeat body until condition [limit L]
+struct StmtRepeatOpLowering : public OpConversionPattern<asl::StmtRepeatOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::StmtRepeatOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    // Check if limit is specified - if so, we need special handling
+    if (adaptor.getLimit()) {
+      return rewriter.notifyMatchFailure(
+          op, "repeat loops with limit not yet supported");
+    }
+
+    // Create scf.while operation for do-while semantics
+    // The body executes at least once, then condition is checked
+    auto whileOp = rewriter.create<scf::WhileOp>(loc, TypeRange{}, ValueRange{});
+
+    // Set up the "before" region (body + condition check)
+    Block *beforeBlock = rewriter.createBlock(&whileOp.getBefore());
+
+    // Move the body operations to before block
+    Region &bodyRegion = op.getBody();
+    if (!bodyRegion.empty()) {
+      Block &bodyBlock = bodyRegion.front();
+      rewriter.inlineBlockBefore(&bodyBlock, beforeBlock, beforeBlock->begin());
+    }
+
+    // Add condition check at end - note: repeat-until continues while NOT cond
+    rewriter.setInsertionPointToEnd(beforeBlock);
+    // NOT the condition since repeat-until exits when condition is TRUE
+    auto boolType = emitc::OpaqueType::get(rewriter.getContext(), "bool");
+    auto negatedCond = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{boolType}, "!",
+        ValueRange{adaptor.getCondition()}, nullptr, nullptr);
+    rewriter.create<scf::ConditionOp>(loc, negatedCond.getResult(0),
+                                      ValueRange{});
+
+    // Set up the "after" region (empty, just yield)
+    Block *afterBlock = rewriter.createBlock(&whileOp.getAfter());
+    rewriter.setInsertionPointToEnd(afterBlock);
+    rewriter.create<scf::YieldOp>(loc);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 // Comparison operations for integers (using GMP)
 template <typename OpTy>
 struct IntCompareOpLowering : public OpConversionPattern<OpTy> {
@@ -1588,6 +1859,13 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
     // Add unary operation patterns (Phase 3)
     patterns.add<UnopBnotOpLowering, UnopNegIntOpLowering, UnopNegRealOpLowering,
                  UnopNotOpLowering>(typeConverter, context);
+
+    // Add control flow patterns (Phase 4)
+    patterns.add<CondOpLowering, StmtPassOpLowering, StmtReturnOpLowering,
+                 StmtSeqOpLowering, StmtCondOpLowering, StmtAssertOpLowering,
+                 StmtUnreachableOpLowering, StmtForOpLowering,
+                 StmtWhileOpLowering, StmtRepeatOpLowering>(typeConverter,
+                                                            context);
 
     // Collect type declarations before conversion for typedef generation
     SmallVector<asl::TypeDeclOp> typeDecls;

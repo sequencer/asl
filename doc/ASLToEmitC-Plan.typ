@@ -98,36 +98,24 @@ See "Binary Operations (Phase 2 - Implemented)" section above.
 - `UnopNegOp` -> `mpz_neg` (integer) or `mpq_neg` (real)
 - `UnopNotOp` -> `~` with mask (bitvector)
 
-=== Phase 4: Control Flow
-Priority: High (required for functions)
+=== Phase 4: Control Flow (IMPLEMENTED)
+Note: Testing requires Phase 5 (Function Declarations) to be completed.
 
-1. *Conditional Expression* (`CondOp`)
-   - Input: condition, then_expr, else_expr
-   - Output: `emitc.conditional` or `scf.if`
+==== Implemented Patterns
+- `CondOp` -> `emitc.conditional` (ternary operator)
+- `StmtCondOp` -> `scf.if` with then/else regions
+- `StmtReturnOp` -> `func.return`
+- `StmtPassOp` -> erased (no-op)
+- `StmtSeqOp` -> inlined body operations
+- `StmtAssertOp` -> `assert()` call
+- `StmtUnreachableOp` -> `__builtin_unreachable()`
+- `StmtWhileOp` -> `scf.while` (without limit support)
+- `StmtRepeatOp` -> `scf.while` with do-while semantics (without limit support)
+- `StmtForOp` -> stub (GMP integer bounds require complex lowering)
 
-2. *Conditional Statement* (`StmtCondOp`)
-   - Input: condition, then/else regions
-   - Output: `scf.if` or `emitc.if`
-
-3. *For Loop* (`StmtForOp`)
-   - Input: index_name, direction, start, end, optional limit, body
-   - Output: `scf.for` or `emitc.for`
-   - Special: limit handling with LimitExceeded exception
-
-4. *While Loop* (`StmtWhileOp`)
-   - Output: `scf.while` or `emitc.while`
-
-5. *Repeat Loop* (`StmtRepeatOp`)
-   - Output: `scf.while` with condition at end
-
-6. *Return Statement* (`StmtReturnOp`)
-   - Output: `func.return` or `emitc.return`
-
-7. *Pass Statement* (`StmtPassOp`)
-   - Output: nothing (no-op)
-
-8. *Sequence Statement* (`StmtSeqOp`)
-   - Output: inline body operations
+==== Not Yet Implemented
+- For loops with GMP bounds (requires conversion to while loop with GMP comparisons)
+- Loop limit handling (LimitExceeded exception)
 
 === Phase 5: Function Declarations
 Priority: High
@@ -237,9 +225,9 @@ Priority: Low (complex runtime)
 === Phase 13: Miscellaneous
 Priority: Low
 
-- `StmtAssertOp` -> runtime assertion
+- `StmtAssertOp` -> runtime assertion (IMPLEMENTED in Phase 4)
 - `StmtPrintOp` -> `printf` calls
-- `StmtUnreachableOp` -> `__builtin_unreachable()` or `abort()`
+- `StmtUnreachableOp` -> `__builtin_unreachable()` (IMPLEMENTED in Phase 4)
 - `StmtPragmaOp` -> pass-through or ignore
 - `ArbitraryOp` -> undefined value (0 or random)
 - `PragmaDeclOp` -> ignore
