@@ -481,6 +481,917 @@ struct LiteralLabelOpLowering
   }
 };
 
+// Convert asl.expr.literal.int to GMP mpz_t initialization
+// ASL integers are arbitrary-precision, so we use GMP's mpz_t type.
+// This pattern creates a temporary mpz_t variable and initializes it
+// with mpz_init_set_str using base 10.
+struct LiteralIntOpLowering : public OpConversionPattern<asl::LiteralIntOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::LiteralIntOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Get the integer value as string
+    StringRef valueStr = op.getValue();
+
+    // Convert the type (should be mpz_t)
+    Type convertedType = getTypeConverter()->convertType(op.getType());
+    if (!convertedType)
+      return failure();
+
+    // Create a temporary mpz_t variable
+    auto mpzType = emitc::OpaqueType::get(context, "mpz_t");
+    auto lvalueType = emitc::LValueType::get(mpzType);
+    auto varOp = rewriter.create<emitc::VariableOp>(
+        loc, lvalueType, emitc::OpaqueAttr::get(context, ""));
+
+    // Load the variable to get the value for GMP function calls
+    auto loadedVar =
+        rewriter.create<emitc::LoadOp>(loc, mpzType, varOp.getResult());
+
+    // Create string constant for the value
+    std::string quotedValue = "\"" + valueStr.str() + "\"";
+    auto strConstant = rewriter.create<emitc::ConstantOp>(
+        loc, emitc::OpaqueType::get(context, "const char*"),
+        emitc::OpaqueAttr::get(context, quotedValue));
+
+    // Create base constant (10 for decimal)
+    auto baseConstant = rewriter.create<emitc::ConstantOp>(
+        loc, rewriter.getI32Type(), rewriter.getI32IntegerAttr(10));
+
+    // Call mpz_init_set_str(var, str, base)
+    rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{}, "mpz_init_set_str",
+        ValueRange{loadedVar.getResult(), strConstant.getResult(),
+                   baseConstant.getResult()},
+        nullptr, nullptr);
+
+    // Replace the op with the lvalue variable
+    rewriter.replaceOp(op, varOp.getResult());
+    return success();
+  }
+};
+
+// Convert asl.expr.literal.bool to emitc.constant with true/false
+// ASL boolean literals map directly to C's bool type from stdbool.h
+struct LiteralBoolOpLowering : public OpConversionPattern<asl::LiteralBoolOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::LiteralBoolOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Convert the type (should be bool)
+    Type convertedType = getTypeConverter()->convertType(op.getType());
+    if (!convertedType)
+      return failure();
+
+    // Get the boolean value
+    bool value = op.getValue();
+
+    // Create EmitC constant with "true" or "false"
+    std::string valueStr = value ? "true" : "false";
+    auto constantOp = rewriter.create<emitc::ConstantOp>(
+        op.getLoc(), convertedType,
+        emitc::OpaqueAttr::get(rewriter.getContext(), valueStr));
+
+    rewriter.replaceOp(op, constantOp.getResult());
+    return success();
+  }
+};
+
+// Convert asl.expr.literal.real to GMP mpq_t initialization
+// ASL reals are exact rationals (p/q), so we use GMP's mpq_t type.
+// The value string can be in various formats:
+// - Decimal: "3.14" -> converted to fraction
+// - Fraction: "22/7"
+// - Integer: "42" -> 42/1
+struct LiteralRealOpLowering : public OpConversionPattern<asl::LiteralRealOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::LiteralRealOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Get the real value as string
+    StringRef valueStr = op.getValue();
+
+    // Convert the type (should be mpq_t)
+    Type convertedType = getTypeConverter()->convertType(op.getType());
+    if (!convertedType)
+      return failure();
+
+    // Create a temporary mpq_t variable
+    auto mpqType = emitc::OpaqueType::get(context, "mpq_t");
+    auto lvalueType = emitc::LValueType::get(mpqType);
+    auto varOp = rewriter.create<emitc::VariableOp>(
+        loc, lvalueType, emitc::OpaqueAttr::get(context, ""));
+
+    // Load the variable to get the value for GMP function calls
+    auto loadedVar =
+        rewriter.create<emitc::LoadOp>(loc, mpqType, varOp.getResult());
+
+    // Initialize the mpq_t
+    rewriter.create<emitc::CallOpaqueOp>(loc, TypeRange{}, "mpq_init",
+                                         ValueRange{loadedVar.getResult()},
+                                         nullptr, nullptr);
+
+    // Convert decimal format to fraction if needed
+    std::string rationalValue = valueStr.str();
+    if (rationalValue.find('.') != std::string::npos) {
+      // Decimal format - convert to fraction
+      // e.g., "3.14" -> "314/100"
+      size_t dotPos = rationalValue.find('.');
+      std::string intPart = rationalValue.substr(0, dotPos);
+      std::string fracPart = rationalValue.substr(dotPos + 1);
+
+      // Calculate denominator (10^number_of_decimal_places)
+      std::string denominator = "1";
+      for (size_t i = 0; i < fracPart.size(); i++) {
+        denominator += "0";
+      }
+
+      // Combine integer and fractional parts for numerator
+      std::string numerator = intPart + fracPart;
+
+      // Remove leading zeros from numerator (but keep at least one digit)
+      size_t firstNonZero = numerator.find_first_not_of('0');
+      if (firstNonZero != std::string::npos && firstNonZero > 0) {
+        numerator = numerator.substr(firstNonZero);
+      } else if (firstNonZero == std::string::npos) {
+        numerator = "0";
+      }
+
+      rationalValue = numerator + "/" + denominator;
+    }
+
+    // Create string constant for the value
+    std::string quotedValue = "\"" + rationalValue + "\"";
+    auto strConstant = rewriter.create<emitc::ConstantOp>(
+        loc, emitc::OpaqueType::get(context, "const char*"),
+        emitc::OpaqueAttr::get(context, quotedValue));
+
+    // Create base constant (10 for decimal)
+    auto baseConstant = rewriter.create<emitc::ConstantOp>(
+        loc, rewriter.getI32Type(), rewriter.getI32IntegerAttr(10));
+
+    // Call mpq_set_str(var, str, base)
+    rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{}, "mpq_set_str",
+        ValueRange{loadedVar.getResult(), strConstant.getResult(),
+                   baseConstant.getResult()},
+        nullptr, nullptr);
+
+    // Canonicalize the rational (reduce to lowest terms)
+    rewriter.create<emitc::CallOpaqueOp>(loc, TypeRange{}, "mpq_canonicalize",
+                                         ValueRange{loadedVar.getResult()},
+                                         nullptr, nullptr);
+
+    // Replace the op with the lvalue variable
+    rewriter.replaceOp(op, varOp.getResult());
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Binary Operation Lowering Patterns
+//===----------------------------------------------------------------------===//
+
+// Helper: Create a temporary mpz_t variable and initialize it
+static Value createTempMpzVar(ConversionPatternRewriter &rewriter, Location loc,
+                              MLIRContext *context) {
+  auto mpzType = emitc::OpaqueType::get(context, "mpz_t");
+  auto lvalueType = emitc::LValueType::get(mpzType);
+  auto varOp = rewriter.create<emitc::VariableOp>(
+      loc, lvalueType, emitc::OpaqueAttr::get(context, ""));
+  auto loadedVar =
+      rewriter.create<emitc::LoadOp>(loc, mpzType, varOp.getResult());
+  rewriter.create<emitc::CallOpaqueOp>(loc, TypeRange{}, "mpz_init",
+                                       ValueRange{loadedVar.getResult()},
+                                       nullptr, nullptr);
+  return varOp.getResult();
+}
+
+// Helper: Create a temporary mpq_t variable and initialize it
+static Value createTempMpqVar(ConversionPatternRewriter &rewriter, Location loc,
+                              MLIRContext *context) {
+  auto mpqType = emitc::OpaqueType::get(context, "mpq_t");
+  auto lvalueType = emitc::LValueType::get(mpqType);
+  auto varOp = rewriter.create<emitc::VariableOp>(
+      loc, lvalueType, emitc::OpaqueAttr::get(context, ""));
+  auto loadedVar =
+      rewriter.create<emitc::LoadOp>(loc, mpqType, varOp.getResult());
+  rewriter.create<emitc::CallOpaqueOp>(loc, TypeRange{}, "mpq_init",
+                                       ValueRange{loadedVar.getResult()},
+                                       nullptr, nullptr);
+  return varOp.getResult();
+}
+
+// Helper: Load a GMP value from an lvalue for passing to GMP functions
+static Value loadGmpValue(ConversionPatternRewriter &rewriter, Location loc,
+                          Value value) {
+  if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(value.getType())) {
+    return rewriter.create<emitc::LoadOp>(loc, lvalueType.getValueType(), value);
+  }
+  return value;
+}
+
+// Integer binary operations: add, sub, mul
+// These lower to GMP mpz_* functions
+template <typename OpTy>
+struct IntBinaryOpLowering : public OpConversionPattern<OpTy> {
+  using OpConversionPattern<OpTy>::OpConversionPattern;
+
+  IntBinaryOpLowering(const TypeConverter &converter, MLIRContext *context,
+                      StringRef gmpFunc)
+      : OpConversionPattern<OpTy>(converter, context), gmpFuncName(gmpFunc) {}
+
+  LogicalResult
+  matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Create temporary mpz_t variable for result
+    Value resultVar = createTempMpzVar(rewriter, loc, context);
+
+    // Load values for GMP function call
+    auto mpzType = emitc::OpaqueType::get(context, "mpz_t");
+    Value loadedResult = rewriter.create<emitc::LoadOp>(loc, mpzType, resultVar);
+    Value loadedLhs = loadGmpValue(rewriter, loc, adaptor.getLhs());
+    Value loadedRhs = loadGmpValue(rewriter, loc, adaptor.getRhs());
+
+    // Call the GMP function: mpz_func(result, lhs, rhs)
+    rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{}, gmpFuncName,
+        ValueRange{loadedResult, loadedLhs, loadedRhs}, nullptr, nullptr);
+
+    rewriter.replaceOp(op, resultVar);
+    return success();
+  }
+
+private:
+  std::string gmpFuncName;
+};
+
+// Integer division operations with different rounding modes
+struct BinopDivOpLowering : public OpConversionPattern<asl::BinopDivOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::BinopDivOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    Value resultVar = createTempMpzVar(rewriter, loc, context);
+    auto mpzType = emitc::OpaqueType::get(context, "mpz_t");
+    Value loadedResult = rewriter.create<emitc::LoadOp>(loc, mpzType, resultVar);
+    Value loadedLhs = loadGmpValue(rewriter, loc, adaptor.getLhs());
+    Value loadedRhs = loadGmpValue(rewriter, loc, adaptor.getRhs());
+
+    // ASL DIV is truncated division (toward zero): mpz_tdiv_q
+    rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{}, "mpz_tdiv_q",
+        ValueRange{loadedResult, loadedLhs, loadedRhs}, nullptr, nullptr);
+
+    rewriter.replaceOp(op, resultVar);
+    return success();
+  }
+};
+
+// DIVRM is floor division (toward negative infinity)
+struct BinopDivrmOpLowering : public OpConversionPattern<asl::BinopDivrmOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::BinopDivrmOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    Value resultVar = createTempMpzVar(rewriter, loc, context);
+    auto mpzType = emitc::OpaqueType::get(context, "mpz_t");
+    Value loadedResult = rewriter.create<emitc::LoadOp>(loc, mpzType, resultVar);
+    Value loadedLhs = loadGmpValue(rewriter, loc, adaptor.getLhs());
+    Value loadedRhs = loadGmpValue(rewriter, loc, adaptor.getRhs());
+
+    // Floor division: mpz_fdiv_q
+    rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{}, "mpz_fdiv_q",
+        ValueRange{loadedResult, loadedLhs, loadedRhs}, nullptr, nullptr);
+
+    rewriter.replaceOp(op, resultVar);
+    return success();
+  }
+};
+
+// MOD operation (remainder)
+struct BinopModOpLowering : public OpConversionPattern<asl::BinopModOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::BinopModOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    Value resultVar = createTempMpzVar(rewriter, loc, context);
+    auto mpzType = emitc::OpaqueType::get(context, "mpz_t");
+    Value loadedResult = rewriter.create<emitc::LoadOp>(loc, mpzType, resultVar);
+    Value loadedLhs = loadGmpValue(rewriter, loc, adaptor.getLhs());
+    Value loadedRhs = loadGmpValue(rewriter, loc, adaptor.getRhs());
+
+    // ASL MOD uses floor remainder semantics: mpz_fdiv_r
+    rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{}, "mpz_fdiv_r",
+        ValueRange{loadedResult, loadedLhs, loadedRhs}, nullptr, nullptr);
+
+    rewriter.replaceOp(op, resultVar);
+    return success();
+  }
+};
+
+// Power operation
+struct BinopPowOpLowering : public OpConversionPattern<asl::BinopPowOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::BinopPowOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    Value resultVar = createTempMpzVar(rewriter, loc, context);
+    auto mpzType = emitc::OpaqueType::get(context, "mpz_t");
+    Value loadedResult = rewriter.create<emitc::LoadOp>(loc, mpzType, resultVar);
+    Value loadedBase = loadGmpValue(rewriter, loc, adaptor.getLhs());
+
+    // The exponent needs to be converted to unsigned long
+    // First get the exponent value (it should be a small integer)
+    Value loadedExp = loadGmpValue(rewriter, loc, adaptor.getRhs());
+
+    // Convert exponent to unsigned long using mpz_get_ui
+    auto ulongType = emitc::OpaqueType::get(context, "unsigned long");
+    auto expUlong = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{ulongType}, "mpz_get_ui", ValueRange{loadedExp}, nullptr,
+        nullptr);
+
+    // mpz_pow_ui(result, base, exp)
+    rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{}, "mpz_pow_ui",
+        ValueRange{loadedResult, loadedBase, expUlong.getResult(0)}, nullptr,
+        nullptr);
+
+    rewriter.replaceOp(op, resultVar);
+    return success();
+  }
+};
+
+// Shift left operation
+struct BinopShlOpLowering : public OpConversionPattern<asl::BinopShlOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::BinopShlOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    Value resultVar = createTempMpzVar(rewriter, loc, context);
+    auto mpzType = emitc::OpaqueType::get(context, "mpz_t");
+    Value loadedResult = rewriter.create<emitc::LoadOp>(loc, mpzType, resultVar);
+    Value loadedLhs = loadGmpValue(rewriter, loc, adaptor.getLhs());
+    Value loadedRhs = loadGmpValue(rewriter, loc, adaptor.getRhs());
+
+    // Convert shift amount to unsigned long
+    auto ulongType = emitc::OpaqueType::get(context, "unsigned long");
+    auto shiftAmount = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{ulongType}, "mpz_get_ui", ValueRange{loadedRhs}, nullptr,
+        nullptr);
+
+    // mpz_mul_2exp(result, op, shift) - multiply by 2^shift
+    rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{}, "mpz_mul_2exp",
+        ValueRange{loadedResult, loadedLhs, shiftAmount.getResult(0)}, nullptr,
+        nullptr);
+
+    rewriter.replaceOp(op, resultVar);
+    return success();
+  }
+};
+
+// Shift right operation
+struct BinopShrOpLowering : public OpConversionPattern<asl::BinopShrOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::BinopShrOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    Value resultVar = createTempMpzVar(rewriter, loc, context);
+    auto mpzType = emitc::OpaqueType::get(context, "mpz_t");
+    Value loadedResult = rewriter.create<emitc::LoadOp>(loc, mpzType, resultVar);
+    Value loadedLhs = loadGmpValue(rewriter, loc, adaptor.getLhs());
+    Value loadedRhs = loadGmpValue(rewriter, loc, adaptor.getRhs());
+
+    // Convert shift amount to unsigned long
+    auto ulongType = emitc::OpaqueType::get(context, "unsigned long");
+    auto shiftAmount = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{ulongType}, "mpz_get_ui", ValueRange{loadedRhs}, nullptr,
+        nullptr);
+
+    // mpz_fdiv_q_2exp(result, op, shift) - floor division by 2^shift
+    rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{}, "mpz_fdiv_q_2exp",
+        ValueRange{loadedResult, loadedLhs, shiftAmount.getResult(0)}, nullptr,
+        nullptr);
+
+    rewriter.replaceOp(op, resultVar);
+    return success();
+  }
+};
+
+// Real binary operations: add, sub, mul
+// These lower to GMP mpq_* functions
+template <typename OpTy>
+struct RealBinaryOpLowering : public OpConversionPattern<OpTy> {
+  using OpConversionPattern<OpTy>::OpConversionPattern;
+
+  RealBinaryOpLowering(const TypeConverter &converter, MLIRContext *context,
+                       StringRef gmpFunc)
+      : OpConversionPattern<OpTy>(converter, context), gmpFuncName(gmpFunc) {}
+
+  LogicalResult
+  matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Create temporary mpq_t variable for result
+    Value resultVar = createTempMpqVar(rewriter, loc, context);
+
+    // Load values for GMP function call
+    auto mpqType = emitc::OpaqueType::get(context, "mpq_t");
+    Value loadedResult = rewriter.create<emitc::LoadOp>(loc, mpqType, resultVar);
+    Value loadedLhs = loadGmpValue(rewriter, loc, adaptor.getLhs());
+    Value loadedRhs = loadGmpValue(rewriter, loc, adaptor.getRhs());
+
+    // Call the GMP function: mpq_func(result, lhs, rhs)
+    rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{}, gmpFuncName,
+        ValueRange{loadedResult, loadedLhs, loadedRhs}, nullptr, nullptr);
+
+    rewriter.replaceOp(op, resultVar);
+    return success();
+  }
+
+private:
+  std::string gmpFuncName;
+};
+
+// Real division (RDIV)
+struct BinopRdivOpLowering : public OpConversionPattern<asl::BinopRdivOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::BinopRdivOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    Value resultVar = createTempMpqVar(rewriter, loc, context);
+    auto mpqType = emitc::OpaqueType::get(context, "mpq_t");
+    Value loadedResult = rewriter.create<emitc::LoadOp>(loc, mpqType, resultVar);
+    Value loadedLhs = loadGmpValue(rewriter, loc, adaptor.getLhs());
+    Value loadedRhs = loadGmpValue(rewriter, loc, adaptor.getRhs());
+
+    rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{}, "mpq_div",
+        ValueRange{loadedResult, loadedLhs, loadedRhs}, nullptr, nullptr);
+
+    rewriter.replaceOp(op, resultVar);
+    return success();
+  }
+};
+
+// Bitvector binary operations: add, sub, mul, and, or, xor
+// For bitvectors <= 64 bits, use native C operators
+// The result is masked to the appropriate bit width
+template <typename OpTy>
+struct BitsBinaryOpLowering : public OpConversionPattern<OpTy> {
+  using OpConversionPattern<OpTy>::OpConversionPattern;
+
+  BitsBinaryOpLowering(const TypeConverter &converter, MLIRContext *context,
+                       StringRef cOperator)
+      : OpConversionPattern<OpTy>(converter, context), cOp(cOperator) {}
+
+  LogicalResult
+  matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    Type convertedType =
+        this->getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedType)
+      return failure();
+
+    // Get the bit width from the result type for masking
+    int64_t bitWidth = 0;
+    if (auto bitsType =
+            llvm::dyn_cast<asl::BitsType>(op.getResult().getType())) {
+      bitWidth = bitsType.getWidth().getInt();
+    }
+
+    // For bitvectors > 64 bits, we would need special handling
+    // For now, only handle <= 64 bits
+    if (bitWidth > 64) {
+      return rewriter.notifyMatchFailure(
+          op, "large bitvector operations not yet supported");
+    }
+
+    // Create the binary operation using emitc.expression or call_opaque
+    // Use emitc.call_opaque with the operator as the callee
+    auto result = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{convertedType}, cOp,
+        ValueRange{adaptor.getLhs(), adaptor.getRhs()}, nullptr, nullptr);
+
+    // Apply mask if needed (for non-power-of-2 widths)
+    if (bitWidth > 0 && bitWidth < 64 && (bitWidth & (bitWidth - 1)) != 0) {
+      // Need to mask the result to bitWidth bits
+      uint64_t mask = (1ULL << bitWidth) - 1;
+      std::string maskStr = std::to_string(mask);
+      if (bitWidth > 32)
+        maskStr += "ULL";
+      else
+        maskStr += "u";
+
+      auto maskConstant = rewriter.create<emitc::ConstantOp>(
+          loc, convertedType,
+          emitc::OpaqueAttr::get(context, maskStr));
+
+      auto maskedResult = rewriter.create<emitc::CallOpaqueOp>(
+          loc, TypeRange{convertedType}, "&",
+          ValueRange{result.getResult(0), maskConstant.getResult()}, nullptr,
+          nullptr);
+
+      rewriter.replaceOp(op, maskedResult.getResult(0));
+    } else {
+      rewriter.replaceOp(op, result.getResult(0));
+    }
+
+    return success();
+  }
+
+private:
+  std::string cOp;
+};
+
+// Bitvector concatenation
+struct BinopConcatOpLowering : public OpConversionPattern<asl::BinopConcatOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::BinopConcatOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    Type convertedType = getTypeConverter()->convertType(op.getType());
+    if (!convertedType)
+      return failure();
+
+    // Get the bit width of the RHS for shifting
+    int64_t rhsWidth = 0;
+    if (auto rhsBitsType = llvm::dyn_cast<asl::BitsType>(op.getRhs().getType())) {
+      rhsWidth = rhsBitsType.getWidth().getInt();
+    }
+
+    if (rhsWidth <= 0 || rhsWidth > 64) {
+      return rewriter.notifyMatchFailure(op, "invalid RHS width for concat");
+    }
+
+    // concat(lhs, rhs) = (lhs << rhsWidth) | rhs
+    // First shift lhs left by rhsWidth
+    std::string shiftStr = std::to_string(rhsWidth);
+    auto shiftConstant = rewriter.create<emitc::ConstantOp>(
+        loc, rewriter.getI32Type(), rewriter.getI32IntegerAttr(rhsWidth));
+
+    auto shiftedLhs = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{convertedType}, "<<",
+        ValueRange{adaptor.getLhs(), shiftConstant.getResult()}, nullptr,
+        nullptr);
+
+    // Then OR with rhs
+    auto result = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{convertedType}, "|",
+        ValueRange{shiftedLhs.getResult(0), adaptor.getRhs()}, nullptr,
+        nullptr);
+
+    rewriter.replaceOp(op, result.getResult(0));
+    return success();
+  }
+};
+
+// Boolean binary operations: band, bor, beq, impl
+// These use native C operators
+struct BinopBandOpLowering : public OpConversionPattern<asl::BinopBandOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::BinopBandOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Type convertedType = getTypeConverter()->convertType(op.getType());
+    if (!convertedType)
+      return failure();
+
+    auto result = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{convertedType}, "&&",
+        ValueRange{adaptor.getLhs(), adaptor.getRhs()}, nullptr, nullptr);
+
+    rewriter.replaceOp(op, result.getResult(0));
+    return success();
+  }
+};
+
+struct BinopBorOpLowering : public OpConversionPattern<asl::BinopBorOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::BinopBorOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Type convertedType = getTypeConverter()->convertType(op.getType());
+    if (!convertedType)
+      return failure();
+
+    auto result = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{convertedType}, "||",
+        ValueRange{adaptor.getLhs(), adaptor.getRhs()}, nullptr, nullptr);
+
+    rewriter.replaceOp(op, result.getResult(0));
+    return success();
+  }
+};
+
+struct BinopBeqOpLowering : public OpConversionPattern<asl::BinopBeqOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::BinopBeqOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Type convertedType = getTypeConverter()->convertType(op.getType());
+    if (!convertedType)
+      return failure();
+
+    // Boolean equivalence: lhs == rhs
+    auto result = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{convertedType}, "==",
+        ValueRange{adaptor.getLhs(), adaptor.getRhs()}, nullptr, nullptr);
+
+    rewriter.replaceOp(op, result.getResult(0));
+    return success();
+  }
+};
+
+struct BinopImplOpLowering : public OpConversionPattern<asl::BinopImplOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::BinopImplOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Type convertedType = getTypeConverter()->convertType(op.getType());
+    if (!convertedType)
+      return failure();
+
+    // Implication: lhs => rhs is equivalent to !lhs || rhs
+    auto notLhs = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{convertedType}, "!", ValueRange{adaptor.getLhs()},
+        nullptr, nullptr);
+
+    auto result = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{convertedType}, "||",
+        ValueRange{notLhs.getResult(0), adaptor.getRhs()}, nullptr, nullptr);
+
+    rewriter.replaceOp(op, result.getResult(0));
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Unary Operation Lowering Patterns (Phase 3)
+//===----------------------------------------------------------------------===//
+
+// Boolean NOT: !operand
+struct UnopBnotOpLowering : public OpConversionPattern<asl::UnopBnotOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::UnopBnotOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Type convertedType = getTypeConverter()->convertType(op.getType());
+    if (!convertedType)
+      return failure();
+
+    auto result = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{convertedType}, "!", ValueRange{adaptor.getOperand()},
+        nullptr, nullptr);
+
+    rewriter.replaceOp(op, result.getResult(0));
+    return success();
+  }
+};
+
+// Integer negation: mpz_neg(result, operand)
+struct UnopNegIntOpLowering : public OpConversionPattern<asl::UnopNegOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::UnopNegOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Only handle integer types
+    if (!llvm::isa<asl::IntType>(op.getOperand().getType()))
+      return failure();
+
+    // Create temporary mpz_t variable for result
+    Value resultVar = createTempMpzVar(rewriter, loc, context);
+
+    // Load values for GMP function call
+    auto mpzType = emitc::OpaqueType::get(context, "mpz_t");
+    Value loadedResult = rewriter.create<emitc::LoadOp>(loc, mpzType, resultVar);
+    Value loadedOperand = loadGmpValue(rewriter, loc, adaptor.getOperand());
+
+    // Call mpz_neg(result, operand)
+    rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{}, "mpz_neg",
+        ValueRange{loadedResult, loadedOperand}, nullptr, nullptr);
+
+    rewriter.replaceOp(op, resultVar);
+    return success();
+  }
+};
+
+// Real negation: mpq_neg(result, operand)
+struct UnopNegRealOpLowering : public OpConversionPattern<asl::UnopNegOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::UnopNegOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Only handle real types
+    if (!llvm::isa<asl::RealType>(op.getOperand().getType()))
+      return failure();
+
+    // Create temporary mpq_t variable for result
+    Value resultVar = createTempMpqVar(rewriter, loc, context);
+
+    // Load values for GMP function call
+    auto mpqType = emitc::OpaqueType::get(context, "mpq_t");
+    Value loadedResult = rewriter.create<emitc::LoadOp>(loc, mpqType, resultVar);
+    Value loadedOperand = loadGmpValue(rewriter, loc, adaptor.getOperand());
+
+    // Call mpq_neg(result, operand)
+    rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{}, "mpq_neg",
+        ValueRange{loadedResult, loadedOperand}, nullptr, nullptr);
+
+    rewriter.replaceOp(op, resultVar);
+    return success();
+  }
+};
+
+// Bitvector NOT: ~operand
+struct UnopNotOpLowering : public OpConversionPattern<asl::UnopNotOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::UnopNotOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    Type convertedType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedType)
+      return failure();
+
+    // Get the bit width from the result type for masking
+    int64_t bitWidth = 0;
+    if (auto bitsType = llvm::dyn_cast<asl::BitsType>(op.getResult().getType())) {
+      bitWidth = bitsType.getWidth().getInt();
+    }
+
+    // For bitvectors > 64 bits, we would need special handling
+    if (bitWidth > 64) {
+      return rewriter.notifyMatchFailure(
+          op, "large bitvector NOT not yet supported");
+    }
+
+    // Create the NOT operation using emitc.call_opaque
+    auto result = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{convertedType}, "~",
+        ValueRange{adaptor.getOperand()}, nullptr, nullptr);
+
+    // Apply mask to clear high bits (for non-native sizes)
+    if (bitWidth > 0 && bitWidth < 64) {
+      uint64_t mask = (1ULL << bitWidth) - 1;
+      std::string maskStr = std::to_string(mask);
+      if (bitWidth > 32)
+        maskStr += "ULL";
+      else
+        maskStr += "u";
+
+      auto maskConstant = rewriter.create<emitc::ConstantOp>(
+          loc, convertedType,
+          emitc::OpaqueAttr::get(context, maskStr));
+
+      auto maskedResult = rewriter.create<emitc::CallOpaqueOp>(
+          loc, TypeRange{convertedType}, "&",
+          ValueRange{result.getResult(0), maskConstant.getResult()}, nullptr,
+          nullptr);
+
+      rewriter.replaceOp(op, maskedResult.getResult(0));
+    } else {
+      rewriter.replaceOp(op, result.getResult(0));
+    }
+
+    return success();
+  }
+};
+
+// Comparison operations for integers (using GMP)
+template <typename OpTy>
+struct IntCompareOpLowering : public OpConversionPattern<OpTy> {
+  using OpConversionPattern<OpTy>::OpConversionPattern;
+
+  IntCompareOpLowering(const TypeConverter &converter, MLIRContext *context,
+                       StringRef cmpOp)
+      : OpConversionPattern<OpTy>(converter, context), compareOp(cmpOp) {}
+
+  LogicalResult
+  matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    // Check if operands are integer types (GMP)
+    Type lhsType = op.getLhs().getType();
+    bool isIntCompare = llvm::isa<asl::IntType>(lhsType);
+
+    Type convertedType =
+        this->getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedType)
+      return failure();
+
+    if (isIntCompare) {
+      // Use mpz_cmp for comparison
+      Value loadedLhs = loadGmpValue(rewriter, loc, adaptor.getLhs());
+      Value loadedRhs = loadGmpValue(rewriter, loc, adaptor.getRhs());
+
+      auto cmpResult = rewriter.create<emitc::CallOpaqueOp>(
+          loc, TypeRange{rewriter.getI32Type()}, "mpz_cmp",
+          ValueRange{loadedLhs, loadedRhs}, nullptr, nullptr);
+
+      // Create comparison with 0
+      auto zeroConstant = rewriter.create<emitc::ConstantOp>(
+          loc, rewriter.getI32Type(), rewriter.getI32IntegerAttr(0));
+
+      auto result = rewriter.create<emitc::CallOpaqueOp>(
+          loc, TypeRange{convertedType}, compareOp,
+          ValueRange{cmpResult.getResult(0), zeroConstant.getResult()}, nullptr,
+          nullptr);
+
+      rewriter.replaceOp(op, result.getResult(0));
+    } else {
+      // For non-GMP types (bitvectors, booleans), use direct comparison
+      auto result = rewriter.create<emitc::CallOpaqueOp>(
+          loc, TypeRange{convertedType}, compareOp,
+          ValueRange{adaptor.getLhs(), adaptor.getRhs()}, nullptr, nullptr);
+
+      rewriter.replaceOp(op, result.getResult(0));
+    }
+
+    return success();
+  }
+
+private:
+  std::string compareOp;
+};
+
 // Convert asl.type_decl operation to EmitC typedef (for enums)
 struct TypeDeclOpLowering : public OpConversionPattern<asl::TypeDeclOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -614,11 +1525,69 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
     // Set up rewrite patterns
     RewritePatternSet patterns(context);
 
-    // Add conversion patterns
+    // Add conversion patterns for literals and declarations
     patterns.add<ConstantInitGlobalStorageDeclOpLowering,
                  LiteralStringOpLowering, LiteralBitvectorOpLowering,
-                 LiteralLabelOpLowering, TypeDeclOpLowering, TupleOpLowering>(
+                 LiteralLabelOpLowering, LiteralIntOpLowering,
+                 LiteralBoolOpLowering, LiteralRealOpLowering,
+                 TypeDeclOpLowering, TupleOpLowering>(typeConverter, context);
+
+    // Add integer binary operation patterns
+    patterns.add<IntBinaryOpLowering<asl::BinopIntAddOp>>(typeConverter, context,
+                                                          "mpz_add");
+    patterns.add<IntBinaryOpLowering<asl::BinopIntSubOp>>(typeConverter, context,
+                                                          "mpz_sub");
+    patterns.add<IntBinaryOpLowering<asl::BinopIntMulOp>>(typeConverter, context,
+                                                          "mpz_mul");
+    patterns.add<BinopDivOpLowering, BinopDivrmOpLowering, BinopModOpLowering,
+                 BinopPowOpLowering, BinopShlOpLowering, BinopShrOpLowering>(
         typeConverter, context);
+
+    // Add real binary operation patterns
+    patterns.add<RealBinaryOpLowering<asl::BinopRealAddOp>>(typeConverter,
+                                                            context, "mpq_add");
+    patterns.add<RealBinaryOpLowering<asl::BinopRealSubOp>>(typeConverter,
+                                                            context, "mpq_sub");
+    patterns.add<RealBinaryOpLowering<asl::BinopRealMulOp>>(typeConverter,
+                                                            context, "mpq_mul");
+    patterns.add<BinopRdivOpLowering>(typeConverter, context);
+
+    // Add bitvector binary operation patterns
+    patterns.add<BitsBinaryOpLowering<asl::BinopBitsAddOp>>(typeConverter,
+                                                            context, "+");
+    patterns.add<BitsBinaryOpLowering<asl::BinopBitsSubOp>>(typeConverter,
+                                                            context, "-");
+    patterns.add<BitsBinaryOpLowering<asl::BinopBitsMulOp>>(typeConverter,
+                                                            context, "*");
+    patterns.add<BitsBinaryOpLowering<asl::BinopAndOp>>(typeConverter, context,
+                                                        "&");
+    patterns.add<BitsBinaryOpLowering<asl::BinopOrOp>>(typeConverter, context,
+                                                       "|");
+    patterns.add<BitsBinaryOpLowering<asl::BinopXorOp>>(typeConverter, context,
+                                                        "^");
+    patterns.add<BinopConcatOpLowering>(typeConverter, context);
+
+    // Add boolean binary operation patterns
+    patterns.add<BinopBandOpLowering, BinopBorOpLowering, BinopBeqOpLowering,
+                 BinopImplOpLowering>(typeConverter, context);
+
+    // Add comparison operation patterns
+    patterns.add<IntCompareOpLowering<asl::BinopEqOp>>(typeConverter, context,
+                                                       "==");
+    patterns.add<IntCompareOpLowering<asl::BinopNeqOp>>(typeConverter, context,
+                                                        "!=");
+    patterns.add<IntCompareOpLowering<asl::BinopLtOp>>(typeConverter, context,
+                                                       "<");
+    patterns.add<IntCompareOpLowering<asl::BinopLeqOp>>(typeConverter, context,
+                                                        "<=");
+    patterns.add<IntCompareOpLowering<asl::BinopGtOp>>(typeConverter, context,
+                                                       ">");
+    patterns.add<IntCompareOpLowering<asl::BinopGeqOp>>(typeConverter, context,
+                                                        ">=");
+
+    // Add unary operation patterns (Phase 3)
+    patterns.add<UnopBnotOpLowering, UnopNegIntOpLowering, UnopNegRealOpLowering,
+                 UnopNotOpLowering>(typeConverter, context);
 
     // Collect type declarations before conversion for typedef generation
     SmallVector<asl::TypeDeclOp> typeDecls;
@@ -990,8 +1959,7 @@ private:
     bool isTuple = false;
     std::string enumTypeName;
 
-    // First, check the ASL type to see if it's a tuple (including named types
-    // that resolve to tuples)
+    // First, resolve named types to check if they're tuples or enums
     Type resolvedVarType = varType;
     if (auto namedType = llvm::dyn_cast<asl::NamedType>(varType)) {
       if (namedType.getResolvedType()) {
@@ -999,6 +1967,7 @@ private:
       }
     }
     isTuple = llvm::isa<asl::TupleType>(resolvedVarType);
+    isEnum = llvm::isa<asl::EnumType>(resolvedVarType);
 
     if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(convertedType)) {
       StringRef typeName = opaqueType.getValue();
@@ -1006,15 +1975,13 @@ private:
       isGMPRational = (typeName == "mpq_t");
       isString = (typeName == "const char*");
       // Also check if converted type is an anonymous struct (for tuples without
-      // names)
+      // names). But exclude large bitvector structs which have a words array.
       if (!isTuple) {
-        isTuple = typeName.starts_with("struct {");
+        isTuple = typeName.starts_with("struct {") &&
+                  !typeName.contains("words[");
       }
-      // Check if it's an enum type (not one of the standard types)
-      if (!isGMPInt && !isGMPRational && !isString && !isTuple &&
-          !typeName.starts_with("uint") && typeName != "bool" &&
-          !typeName.starts_with("asl_")) {
-        isEnum = true;
+      // Store the enum type name for generating the enum constant
+      if (isEnum) {
         enumTypeName = typeName.str();
       }
     }

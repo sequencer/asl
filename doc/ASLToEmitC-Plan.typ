@@ -93,12 +93,10 @@ Remaining:
 === Phase 2: Binary Operations (COMPLETED)
 See "Binary Operations (Phase 2 - Implemented)" section above.
 
-=== Phase 3: Unary Operations
-Priority: High
-
+=== Phase 3: Unary Operations (COMPLETED)
 - `UnopBnotOp` -> `!` (boolean)
-- `UnopNegOp` -> type-dependent (`mpz_neg`, `mpq_neg`, `-`)
-- `UnopNotOp` -> `~` (bitvector)
+- `UnopNegOp` -> `mpz_neg` (integer) or `mpq_neg` (real)
+- `UnopNotOp` -> `~` with mask (bitvector)
 
 === Phase 4: Control Flow
 Priority: High (required for functions)

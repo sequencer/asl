@@ -1429,17 +1429,16 @@ struct JSONImporter {
         return val.takeError();
       StringRef uop = *opName;
       if (uop == "NEG") {
-        return builder.create<asl::UnopNegOp>(loc, getDefaultIntType(), *val)
-            .getResult();
+        // NEG result type matches operand type (int or real)
+        Type opType = val->getType();
+        return builder.create<asl::UnopNegOp>(loc, opType, *val).getResult();
       } else if (uop == "BNOT") {
         return builder.create<asl::UnopBnotOp>(loc, builder.getI1Type(), *val)
             .getResult();
       } else if (uop == "NOT") {
-        // NOT is defined over bitvectors (see ASL_UnopNotOp in
-        // ASLExpressions.td) Previously this incorrectly used an IntType result
-        // causing a failed cast to BitsType during op construction.
-        return builder.create<asl::UnopNotOp>(loc, getDefaultBitsType(), *val)
-            .getResult();
+        // NOT result type matches operand type (bitvector)
+        Type opType = val->getType();
+        return builder.create<asl::UnopNotOp>(loc, opType, *val).getResult();
       }
       return makeError("unsupported unop: ", uop);
     } else if (k == "E_Slice") {
