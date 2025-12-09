@@ -550,6 +550,458 @@ OpFoldResult ZCongruentOp::fold(FoldAdaptor adaptor) {
 }
 
 //===----------------------------------------------------------------------===//
+// ZCompareOp (Three-way comparison)
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZCompareOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr) {
+    MPZValue lhs(lhsAttr.getValue());
+    MPZValue rhs(rhsAttr.getValue());
+    int cmp = mpz_cmp(lhs.get(), rhs.get());
+    // Normalize to -1, 0, 1
+    int32_t result = (cmp > 0) ? 1 : (cmp < 0) ? -1 : 0;
+    return IntegerAttr::get(IntegerType::get(getContext(), 32), result);
+  }
+
+  // x compare x -> 0
+  if (getLhs() == getRhs())
+    return IntegerAttr::get(IntegerType::get(getContext(), 32), 0);
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZEqualOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZEqualOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr) {
+    MPZValue lhs(lhsAttr.getValue());
+    MPZValue rhs(rhsAttr.getValue());
+    bool equal = mpz_cmp(lhs.get(), rhs.get()) == 0;
+    return BoolAttr::get(getContext(), equal);
+  }
+
+  // x == x -> true
+  if (getLhs() == getRhs())
+    return BoolAttr::get(getContext(), true);
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZLtOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZLtOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr) {
+    MPZValue lhs(lhsAttr.getValue());
+    MPZValue rhs(rhsAttr.getValue());
+    bool lt = mpz_cmp(lhs.get(), rhs.get()) < 0;
+    return BoolAttr::get(getContext(), lt);
+  }
+
+  // x < x -> false
+  if (getLhs() == getRhs())
+    return BoolAttr::get(getContext(), false);
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZLeqOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZLeqOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr) {
+    MPZValue lhs(lhsAttr.getValue());
+    MPZValue rhs(rhsAttr.getValue());
+    bool leq = mpz_cmp(lhs.get(), rhs.get()) <= 0;
+    return BoolAttr::get(getContext(), leq);
+  }
+
+  // x <= x -> true
+  if (getLhs() == getRhs())
+    return BoolAttr::get(getContext(), true);
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZGtOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZGtOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr) {
+    MPZValue lhs(lhsAttr.getValue());
+    MPZValue rhs(rhsAttr.getValue());
+    bool gt = mpz_cmp(lhs.get(), rhs.get()) > 0;
+    return BoolAttr::get(getContext(), gt);
+  }
+
+  // x > x -> false
+  if (getLhs() == getRhs())
+    return BoolAttr::get(getContext(), false);
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZGeqOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZGeqOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr) {
+    MPZValue lhs(lhsAttr.getValue());
+    MPZValue rhs(rhsAttr.getValue());
+    bool geq = mpz_cmp(lhs.get(), rhs.get()) >= 0;
+    return BoolAttr::get(getContext(), geq);
+  }
+
+  // x >= x -> true
+  if (getLhs() == getRhs())
+    return BoolAttr::get(getContext(), true);
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZLogAndOp (Bitwise AND)
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZLogAndOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr) {
+    MPZValue lhs(lhsAttr.getValue());
+    MPZValue rhs(rhsAttr.getValue());
+    MPZValue result;
+    mpz_and(result.get(), lhs.get(), rhs.get());
+    return ZAttr::get(getContext(), result.toString());
+  }
+
+  // x & 0 -> 0
+  if ((lhsAttr && lhsAttr.isZero()) || (rhsAttr && rhsAttr.isZero()))
+    return ZAttr::get(getContext(), "0");
+
+  // x & x -> x
+  if (getLhs() == getRhs())
+    return getLhs();
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZLogOrOp (Bitwise OR)
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZLogOrOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr) {
+    MPZValue lhs(lhsAttr.getValue());
+    MPZValue rhs(rhsAttr.getValue());
+    MPZValue result;
+    mpz_ior(result.get(), lhs.get(), rhs.get());
+    return ZAttr::get(getContext(), result.toString());
+  }
+
+  // x | 0 -> x
+  if (rhsAttr && rhsAttr.isZero())
+    return getLhs();
+  if (lhsAttr && lhsAttr.isZero())
+    return getRhs();
+
+  // x | x -> x
+  if (getLhs() == getRhs())
+    return getLhs();
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZLogXorOp (Bitwise XOR)
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZLogXorOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr) {
+    MPZValue lhs(lhsAttr.getValue());
+    MPZValue rhs(rhsAttr.getValue());
+    MPZValue result;
+    mpz_xor(result.get(), lhs.get(), rhs.get());
+    return ZAttr::get(getContext(), result.toString());
+  }
+
+  // x ^ 0 -> x
+  if (rhsAttr && rhsAttr.isZero())
+    return getLhs();
+  if (lhsAttr && lhsAttr.isZero())
+    return getRhs();
+
+  // x ^ x -> 0
+  if (getLhs() == getRhs())
+    return ZAttr::get(getContext(), "0");
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZLogNotOp (Bitwise complement)
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZLogNotOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<ZAttr>(adaptor.getOperand())) {
+    MPZValue val(attr.getValue());
+    MPZValue result;
+    mpz_com(result.get(), val.get());
+    return ZAttr::get(getContext(), result.toString());
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZShiftLeftOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZShiftLeftOp::fold(FoldAdaptor adaptor) {
+  auto opAttr = dyn_cast_or_null<ZAttr>(adaptor.getOperand());
+  auto countAttr = dyn_cast_or_null<IntegerAttr>(adaptor.getCount());
+
+  if (opAttr && countAttr) {
+    MPZValue val(opAttr.getValue());
+    MPZValue result;
+    uint64_t count = countAttr.getInt();
+    mpz_mul_2exp(result.get(), val.get(), count);
+    return ZAttr::get(getContext(), result.toString());
+  }
+
+  // x << 0 -> x
+  if (countAttr && countAttr.getInt() == 0)
+    return getOperand();
+
+  // 0 << n -> 0
+  if (opAttr && opAttr.isZero())
+    return opAttr;
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZShiftRightOp (Floor division by 2^n)
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZShiftRightOp::fold(FoldAdaptor adaptor) {
+  auto opAttr = dyn_cast_or_null<ZAttr>(adaptor.getOperand());
+  auto countAttr = dyn_cast_or_null<IntegerAttr>(adaptor.getCount());
+
+  if (opAttr && countAttr) {
+    MPZValue val(opAttr.getValue());
+    MPZValue result;
+    uint64_t count = countAttr.getInt();
+    mpz_fdiv_q_2exp(result.get(), val.get(), count);
+    return ZAttr::get(getContext(), result.toString());
+  }
+
+  // x >> 0 -> x
+  if (countAttr && countAttr.getInt() == 0)
+    return getOperand();
+
+  // 0 >> n -> 0
+  if (opAttr && opAttr.isZero())
+    return opAttr;
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZShiftRightTruncOp (Truncated division by 2^n)
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZShiftRightTruncOp::fold(FoldAdaptor adaptor) {
+  auto opAttr = dyn_cast_or_null<ZAttr>(adaptor.getOperand());
+  auto countAttr = dyn_cast_or_null<IntegerAttr>(adaptor.getCount());
+
+  if (opAttr && countAttr) {
+    MPZValue val(opAttr.getValue());
+    MPZValue result;
+    uint64_t count = countAttr.getInt();
+    mpz_tdiv_q_2exp(result.get(), val.get(), count);
+    return ZAttr::get(getContext(), result.toString());
+  }
+
+  // x >> 0 -> x
+  if (countAttr && countAttr.getInt() == 0)
+    return getOperand();
+
+  // 0 >> n -> 0
+  if (opAttr && opAttr.isZero())
+    return opAttr;
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZTestBitOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZTestBitOp::fold(FoldAdaptor adaptor) {
+  auto opAttr = dyn_cast_or_null<ZAttr>(adaptor.getOperand());
+  auto indexAttr = dyn_cast_or_null<IntegerAttr>(adaptor.getIndex());
+
+  if (opAttr && indexAttr) {
+    MPZValue val(opAttr.getValue());
+    uint64_t index = indexAttr.getInt();
+    bool bit = mpz_tstbit(val.get(), index) != 0;
+    return BoolAttr::get(getContext(), bit);
+  }
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZPopCountOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZPopCountOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<ZAttr>(adaptor.getOperand())) {
+    MPZValue val(attr.getValue());
+    mp_bitcnt_t count = mpz_popcount(val.get());
+    // Note: for negative numbers, mpz_popcount returns ULONG_MAX
+    return IntegerAttr::get(IntegerType::get(getContext(), 64), count);
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZNumBitsOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZNumBitsOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<ZAttr>(adaptor.getOperand())) {
+    MPZValue val(attr.getValue());
+    // mpz_sizeinbase returns 1 for 0, but we want 0 for 0
+    if (mpz_sgn(val.get()) == 0)
+      return IntegerAttr::get(IntegerType::get(getContext(), 64), 0);
+    size_t bits = mpz_sizeinbase(val.get(), 2);
+    return IntegerAttr::get(IntegerType::get(getContext(), 64), bits);
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZTrailingZerosOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZTrailingZerosOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<ZAttr>(adaptor.getOperand())) {
+    MPZValue val(attr.getValue());
+    // mpz_scan1 returns ULONG_MAX if no 1 bit found (i.e., for 0)
+    mp_bitcnt_t zeros = mpz_scan1(val.get(), 0);
+    return IntegerAttr::get(IntegerType::get(getContext(), 64), zeros);
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZExtractOp (Unsigned bit extraction)
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZExtractOp::fold(FoldAdaptor adaptor) {
+  auto opAttr = dyn_cast_or_null<ZAttr>(adaptor.getOperand());
+  auto loAttr = dyn_cast_or_null<IntegerAttr>(adaptor.getLo());
+  auto widthAttr = dyn_cast_or_null<IntegerAttr>(adaptor.getWidth());
+
+  if (opAttr && loAttr && widthAttr) {
+    MPZValue val(opAttr.getValue());
+    uint64_t lo = loAttr.getInt();
+    uint64_t width = widthAttr.getInt();
+
+    if (width == 0)
+      return ZAttr::get(getContext(), "0");
+
+    MPZValue result;
+    // Shift right by lo bits, then mask with (2^width - 1)
+    mpz_fdiv_q_2exp(result.get(), val.get(), lo);
+
+    MPZValue mask;
+    mpz_set_ui(mask.get(), 1);
+    mpz_mul_2exp(mask.get(), mask.get(), width);
+    mpz_sub_ui(mask.get(), mask.get(), 1);
+
+    mpz_and(result.get(), result.get(), mask.get());
+    return ZAttr::get(getContext(), result.toString());
+  }
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZSignedExtractOp (Signed bit extraction)
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZSignedExtractOp::fold(FoldAdaptor adaptor) {
+  auto opAttr = dyn_cast_or_null<ZAttr>(adaptor.getOperand());
+  auto loAttr = dyn_cast_or_null<IntegerAttr>(adaptor.getLo());
+  auto widthAttr = dyn_cast_or_null<IntegerAttr>(adaptor.getWidth());
+
+  if (opAttr && loAttr && widthAttr) {
+    MPZValue val(opAttr.getValue());
+    uint64_t lo = loAttr.getInt();
+    uint64_t width = widthAttr.getInt();
+
+    if (width == 0)
+      return ZAttr::get(getContext(), "0");
+
+    MPZValue result;
+    // Shift right by lo bits
+    mpz_fdiv_q_2exp(result.get(), val.get(), lo);
+
+    // Mask with (2^width - 1)
+    MPZValue mask;
+    mpz_set_ui(mask.get(), 1);
+    mpz_mul_2exp(mask.get(), mask.get(), width);
+    mpz_sub_ui(mask.get(), mask.get(), 1);
+    mpz_and(result.get(), result.get(), mask.get());
+
+    // Check if sign bit is set (bit at position width-1)
+    if (mpz_tstbit(result.get(), width - 1)) {
+      // Sign extend: subtract 2^width
+      MPZValue twoToWidth;
+      mpz_set_ui(twoToWidth.get(), 1);
+      mpz_mul_2exp(twoToWidth.get(), twoToWidth.get(), width);
+      mpz_sub(result.get(), result.get(), twoToWidth.get());
+    }
+
+    return ZAttr::get(getContext(), result.toString());
+  }
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
 // QConstantOp
 //===----------------------------------------------------------------------===//
 

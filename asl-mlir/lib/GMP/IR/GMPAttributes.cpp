@@ -112,8 +112,8 @@ bool QAttr::isReal() const { return getDenominator() != "0"; }
 // ZAttr Parse/Print
 //===----------------------------------------------------------------------===//
 
-/// Parse a signed integer as a string (handles negative numbers and
-/// arbitrary precision by reading digits directly as a string).
+/// Parse a signed integer as a string (handles negative numbers,
+/// arbitrary precision, and binary/hex literals like 0b1010 and 0xFF).
 static FailureOr<std::string> parseSignedInteger(AsmParser &parser) {
   std::string value;
 
@@ -123,15 +123,52 @@ static FailureOr<std::string> parseSignedInteger(AsmParser &parser) {
     isNegative = true;
   }
 
-  // For arbitrary precision, we parse the integer as an APInt with sufficient
-  // bits to hold the value, then convert to string. APInt::parseInteger will
-  // automatically allocate enough bits.
+  // Try to parse binary literal (0b...) which MLIR lexer doesn't handle natively.
+  // The lexer will tokenize "0b1010" as integer "0" followed by identifier "b1010".
   APInt intVal;
-  if (parser.parseInteger(intVal)) {
+
+  // First, try normal integer parsing (handles decimal and hex 0x...)
+  OptionalParseResult intResult = parser.parseOptionalInteger(intVal);
+  if (intResult.has_value()) {
+    if (failed(*intResult)) {
+      return failure();
+    }
+    // Check if this is the start of a binary literal: we parsed "0" and next is "b..."
+    if (intVal == 0) {
+      // Try to parse identifier starting with 'b' for binary literal
+      llvm::StringRef binStr;
+      if (succeeded(parser.parseOptionalKeyword(&binStr)) &&
+          binStr.size() > 0 && (binStr[0] == 'b' || binStr[0] == 'B')) {
+        // It's a binary literal like 0b1010
+        llvm::StringRef digits = binStr.drop_front(1);
+        if (digits.empty()) {
+          parser.emitError(parser.getCurrentLocation(),
+                           "expected binary digits after '0b'");
+          return failure();
+        }
+        // Validate all characters are 0 or 1
+        for (char c : digits) {
+          if (c != '0' && c != '1') {
+            parser.emitError(parser.getCurrentLocation(),
+                             "invalid binary digit");
+            return failure();
+          }
+        }
+        // Parse as binary
+        unsigned numBits = digits.size() + 1;
+        if (numBits < 65)
+          numBits = 65;
+        intVal = APInt(numBits, digits, 2);
+      }
+    }
+  } else {
+    // parseOptionalInteger didn't find an integer, this is an error
+    parser.emitError(parser.getCurrentLocation(), "expected integer value");
     return failure();
   }
 
-  // Convert to string - use unsigned string since we handle sign separately
+  // Convert to decimal string - use unsigned string since we handle sign
+  // separately. This normalizes binary (0b...) and hex (0x...) to decimal.
   llvm::SmallString<128> str;
   intVal.toStringUnsigned(str, 10);
   value = std::string(str);

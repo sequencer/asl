@@ -468,6 +468,409 @@ def GMP_ZCongruentOp : GMP_Op<"z.congruent", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// Z Comparison Operations
+//===----------------------------------------------------------------------===//
+
+def GMP_ZCompareOp : GMP_Op<"z.compare", [Pure]> {
+  let summary = "Three-way comparison of arbitrary precision integers";
+  let description = [{
+    Compares two arbitrary precision integers and returns:
+    - negative value if lhs < rhs
+    - zero if lhs == rhs
+    - positive value if lhs > rhs
+    This is equivalent to GMP's mpz_cmp.
+
+    Example:
+    ```mlir
+    %cmp = gmp.z.compare %a, %b : i32
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs I32:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZEqualOp : GMP_Op<"z.equal", [Pure, Commutative]> {
+  let summary = "Test equality of arbitrary precision integers";
+  let description = [{
+    Returns true if lhs equals rhs.
+
+    Example:
+    ```mlir
+    %eq = gmp.z.equal %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs I1:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZLtOp : GMP_Op<"z.lt", [Pure]> {
+  let summary = "Test if lhs is less than rhs";
+  let description = [{
+    Returns true if lhs < rhs.
+
+    Example:
+    ```mlir
+    %lt = gmp.z.lt %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs I1:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZLeqOp : GMP_Op<"z.leq", [Pure]> {
+  let summary = "Test if lhs is less than or equal to rhs";
+  let description = [{
+    Returns true if lhs <= rhs.
+
+    Example:
+    ```mlir
+    %leq = gmp.z.leq %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs I1:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZGtOp : GMP_Op<"z.gt", [Pure]> {
+  let summary = "Test if lhs is greater than rhs";
+  let description = [{
+    Returns true if lhs > rhs.
+
+    Example:
+    ```mlir
+    %gt = gmp.z.gt %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs I1:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZGeqOp : GMP_Op<"z.geq", [Pure]> {
+  let summary = "Test if lhs is greater than or equal to rhs";
+  let description = [{
+    Returns true if lhs >= rhs.
+
+    Example:
+    ```mlir
+    %geq = gmp.z.geq %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs I1:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Z Bitwise Logical Operations
+//===----------------------------------------------------------------------===//
+
+def GMP_ZLogAndOp : GMP_Op<"z.logand", [Pure, Commutative]> {
+  let summary = "Bitwise AND of arbitrary precision integers";
+  let description = [{
+    Computes the bitwise AND of two arbitrary precision integers.
+    This is equivalent to GMP's mpz_and.
+
+    Example:
+    ```mlir
+    %and = gmp.z.logand %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZLogOrOp : GMP_Op<"z.logor", [Pure, Commutative]> {
+  let summary = "Bitwise OR of arbitrary precision integers";
+  let description = [{
+    Computes the bitwise OR of two arbitrary precision integers.
+    This is equivalent to GMP's mpz_ior.
+
+    Example:
+    ```mlir
+    %or = gmp.z.logor %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZLogXorOp : GMP_Op<"z.logxor", [Pure, Commutative]> {
+  let summary = "Bitwise XOR of arbitrary precision integers";
+  let description = [{
+    Computes the bitwise XOR of two arbitrary precision integers.
+    This is equivalent to GMP's mpz_xor.
+
+    Example:
+    ```mlir
+    %xor = gmp.z.logxor %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZLogNotOp : GMP_Op<"z.lognot", [Pure]> {
+  let summary = "Bitwise complement of an arbitrary precision integer";
+  let description = [{
+    Computes the one's complement (bitwise NOT) of an arbitrary precision integer.
+    This is equivalent to GMP's mpz_com.
+
+    Example:
+    ```mlir
+    %not = gmp.z.lognot %x
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$operand);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Z Bit Shift Operations
+//===----------------------------------------------------------------------===//
+
+def GMP_ZShiftLeftOp : GMP_Op<"z.shift_left", [Pure]> {
+  let summary = "Left shift an arbitrary precision integer";
+  let description = [{
+    Shifts operand left by count bits. Equivalent to multiplying by 2^count.
+    This is equivalent to GMP's mpz_mul_2exp.
+
+    Example:
+    ```mlir
+    %shifted = gmp.z.shift_left %x, %count
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$operand, I64:$count);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$operand `,` $count attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZShiftRightOp : GMP_Op<"z.shift_right", [Pure]> {
+  let summary = "Arithmetic right shift (floor division by 2^count)";
+  let description = [{
+    Shifts operand right by count bits using floor division semantics.
+    Equivalent to floor division by 2^count.
+    This is equivalent to GMP's mpz_fdiv_q_2exp.
+
+    Example:
+    ```mlir
+    %shifted = gmp.z.shift_right %x, %count
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$operand, I64:$count);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$operand `,` $count attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZShiftRightTruncOp : GMP_Op<"z.shift_right_trunc", [Pure]> {
+  let summary = "Truncating right shift (truncated division by 2^count)";
+  let description = [{
+    Shifts operand right by count bits using truncation toward zero.
+    Equivalent to truncated division by 2^count.
+    This is equivalent to GMP's mpz_tdiv_q_2exp.
+
+    Example:
+    ```mlir
+    %shifted = gmp.z.shift_right_trunc %x, %count
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$operand, I64:$count);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$operand `,` $count attr-dict";
+
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Z Bit Query Operations
+//===----------------------------------------------------------------------===//
+
+def GMP_ZTestBitOp : GMP_Op<"z.testbit", [Pure]> {
+  let summary = "Test if a specific bit is set";
+  let description = [{
+    Returns true if bit at position index is set in operand.
+    This is equivalent to GMP's mpz_tstbit.
+
+    Example:
+    ```mlir
+    %bit = gmp.z.testbit %x, %index
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$operand, I64:$index);
+  let results = (outs I1:$result);
+
+  let assemblyFormat = "$operand `,` $index attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZPopCountOp : GMP_Op<"z.popcount", [Pure]> {
+  let summary = "Count the number of set bits";
+  let description = [{
+    Returns the population count (number of 1 bits) for non-negative integers.
+    For negative integers, returns the maximum possible value (ULONG_MAX).
+    This is equivalent to GMP's mpz_popcount.
+
+    Example:
+    ```mlir
+    %count = gmp.z.popcount %x
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$operand);
+  let results = (outs I64:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZNumBitsOp : GMP_Op<"z.numbits", [Pure]> {
+  let summary = "Count the number of bits needed to represent the value";
+  let description = [{
+    Returns the number of bits required to represent the absolute value.
+    Returns 0 for zero, otherwise returns floor(log2(|x|)) + 1.
+    This is equivalent to GMP's mpz_sizeinbase with base 2.
+
+    Example:
+    ```mlir
+    %bits = gmp.z.numbits %x
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$operand);
+  let results = (outs I64:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZTrailingZerosOp : GMP_Op<"z.trailing_zeros", [Pure]> {
+  let summary = "Count trailing zero bits";
+  let description = [{
+    Returns the number of trailing zero bits (index of least significant 1 bit).
+    Returns ULONG_MAX for zero.
+    This is equivalent to GMP's mpz_scan1 starting from bit 0.
+
+    Example:
+    ```mlir
+    %zeros = gmp.z.trailing_zeros %x
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$operand);
+  let results = (outs I64:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Z Bit Extraction Operations
+//===----------------------------------------------------------------------===//
+
+def GMP_ZExtractOp : GMP_Op<"z.extract", [Pure]> {
+  let summary = "Extract a range of bits as unsigned integer";
+  let description = [{
+    Extracts width bits starting at position lo from operand.
+    The result is treated as an unsigned integer.
+
+    Example:
+    ```mlir
+    %bits = gmp.z.extract %x, %lo, %width
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$operand, I64:$lo, I64:$width);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$operand `,` $lo `,` $width attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZSignedExtractOp : GMP_Op<"z.signed_extract", [Pure]> {
+  let summary = "Extract a range of bits as signed integer";
+  let description = [{
+    Extracts width bits starting at position lo from operand.
+    The result is sign-extended based on the highest extracted bit.
+
+    Example:
+    ```mlir
+    %bits = gmp.z.signed_extract %x, %lo, %width
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$operand, I64:$lo, I64:$width);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$operand `,` $lo `,` $width attr-dict";
+
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // Q Module: Rational Operations
 //===----------------------------------------------------------------------===//
 
