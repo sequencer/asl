@@ -39,10 +39,12 @@ llvm::APInt ZAttr::getAPInt() const {
   if (isNegative)
     str = str.drop_front(1);
 
-  // Calculate required bits: roughly 3.32 bits per decimal digit + 1 for sign
-  unsigned numBits = str.size() * 4 + 1;
-  if (numBits < 64)
-    numBits = 64;
+  // Calculate required bits: log2(10) ≈ 3.32 bits per decimal digit.
+  // We need one extra bit for sign to ensure the high bit is 0 for positive
+  // numbers, allowing correct sign extension later.
+  unsigned numBits = str.size() * 4 + 2; // +2 for safety margin
+  if (numBits < 65)
+    numBits = 65; // Minimum 65 bits to handle 64-bit values plus sign
 
   llvm::APInt result(numBits, str, 10);
   if (isNegative)
@@ -110,7 +112,8 @@ bool QAttr::isReal() const { return getDenominator() != "0"; }
 // ZAttr Parse/Print
 //===----------------------------------------------------------------------===//
 
-/// Parse a signed integer as a string (handles negative numbers)
+/// Parse a signed integer as a string (handles negative numbers and
+/// arbitrary precision by reading digits directly as a string).
 static FailureOr<std::string> parseSignedInteger(AsmParser &parser) {
   std::string value;
 
@@ -120,18 +123,20 @@ static FailureOr<std::string> parseSignedInteger(AsmParser &parser) {
     isNegative = true;
   }
 
-  // Parse the integer value
+  // For arbitrary precision, we parse the integer as an APInt with sufficient
+  // bits to hold the value, then convert to string. APInt::parseInteger will
+  // automatically allocate enough bits.
   APInt intVal;
   if (parser.parseInteger(intVal)) {
     return failure();
   }
 
-  // Convert to string
-  llvm::SmallString<32> str;
-  intVal.toStringSigned(str);
+  // Convert to string - use unsigned string since we handle sign separately
+  llvm::SmallString<128> str;
+  intVal.toStringUnsigned(str, 10);
   value = std::string(str);
 
-  if (isNegative && !value.empty() && value[0] != '-') {
+  if (isNegative) {
     value = "-" + value;
   }
 

@@ -88,6 +88,7 @@
                 ocaml
                 cmake
                 ninja
+                gmp
               ];
             };
           };

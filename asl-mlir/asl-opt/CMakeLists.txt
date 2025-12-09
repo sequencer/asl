@@ -27,4 +27,5 @@ target_link_libraries(asl-opt PRIVATE
   MLIRSupport
   MLIRIR
   MLIRTargetCpp
+  ${GMP_LIBRARY}
 )

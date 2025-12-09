@@ -12,6 +12,7 @@
   callPackage,
   asl-llvm,
   asl-json-backend,
+  gmp,
 }:
 
 let
@@ -33,6 +34,7 @@ stdenv.mkDerivation rec {
     asl-llvm
     asl-json-backend
     lit
+    gmp
   ];
 
   cmakeFlags = [

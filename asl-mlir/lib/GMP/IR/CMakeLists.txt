@@ -14,3 +14,6 @@ add_mlir_dialect_library(MLIRGMP
   MLIRIR
   MLIRSupport
 )
+
+target_include_directories(obj.MLIRGMP PRIVATE ${GMP_INCLUDE_DIR})
+target_link_libraries(obj.MLIRGMP PRIVATE ${GMP_LIBRARY})

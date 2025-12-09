@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 project(asl-mlir)
 
 find_package(MLIR REQUIRED CONFIG)
+find_library(GMP_LIBRARY gmp REQUIRED)
+find_path(GMP_INCLUDE_DIR gmp.h REQUIRED)
 
 message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
