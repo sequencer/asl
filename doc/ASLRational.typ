@@ -514,18 +514,42 @@ Mapped to `asl.stmt.assert`. Assertion statement. Takes boolean expression input
 === For Loop Statement <s_for>
 Mapped to `asl.stmt.for`. For loop statement.
 Attributes: `index_name` (`StringAttr`), `direction` (`ForDirectionAttr`).
-Inputs: `start`, `end` for loop bounds, optional `limit` for static limit.
+Inputs: `start`, `end` for loop bounds, optional `limit` for iteration limit.
 Body in first region.
 
 === While Loop Statement <s_while>
 Mapped to `asl.stmt.while`. While loop with condition input.
-Input: optional `limit` for static limit.
+Input: optional `limit` for iteration limit.
 Body in first region.
 
 === Repeat-Until Loop Statement <s_repeat>
 Mapped to `asl.stmt.repeat`. Repeat-until loop.
-Input: optional `limit` for static limit.
+Input: optional `limit` for iteration limit.
 Body in first region.
+
+=== Loop Limit Semantics <loop_limit_semantics>
+ASL loops support optional iteration limits to bound execution. The `limit` operand on `asl.stmt.for`, `asl.stmt.while`, and `asl.stmt.repeat` implements these semantics:
+
+*Evaluation:* The limit expression is evaluated once at loop entry, producing a non-negative integer.
+
+*Decrement:* Before each iteration body executes, the limit is decremented by one.
+
+*Termination:* If the limit reaches zero before the loop condition terminates naturally, a `LimitExceeded` dynamic error is raised. This is distinct from normal loop termination.
+
+#table(
+  columns: 3,
+  inset: 6pt,
+  [Limit Value], [Behavior], [Result],
+  [None], [No limit enforcement], [Normal loop semantics],
+  [> 0], [Decremented each iteration], [Continues until condition or limit],
+  [0], [Raises error immediately], [`LimitExceeded` exception],
+)
+
+*Lowering responsibility:* When lowering to executable code, the lowering pass must:
+1. Evaluate the limit expression once at loop entry
+2. Track the remaining iterations
+3. Check and decrement before each body execution
+4. Generate `LimitExceeded` exception when limit reaches zero
 
 === Exception Throwing Statement <s_throw>
 Mapped to `asl.stmt.throw`. Exception throwing statement.

@@ -132,9 +132,13 @@ def ASL_StmtForOp : ASL_StmtOp<"stmt.for"> {
   let description = [{
     For loop statement.
     Attributes: index_name (StringAttr), direction (ForDirectionAttr).
-    Inputs: start, end for loop bounds, optional limit for static limit.
+    Inputs: start, end for loop bounds, optional limit for iteration limit.
     Body in first region.
     Corresponds to S_For in ASL.
+
+    Loop limit semantics: If limit is provided, it is evaluated once at loop
+    entry. Before each iteration, the limit is decremented. If it reaches zero,
+    a LimitExceeded dynamic error is raised.
   }];
 
   let arguments = (ins StrAttr:$index_name, ASL_ForDirectionAttr:$direction,
@@ -149,9 +153,13 @@ def ASL_StmtWhileOp : ASL_StmtOp<"stmt.while"> {
   let summary = "While loop statement";
   let description = [{
     While loop with condition input.
-    Input: optional limit for static limit.
+    Input: optional limit for iteration limit.
     Body in first region.
     Corresponds to S_While in ASL.
+
+    Loop limit semantics: If limit is provided, it is evaluated once at loop
+    entry. Before each iteration, the limit is decremented. If it reaches zero,
+    a LimitExceeded dynamic error is raised.
   }];
 
   let arguments = (ins I1:$condition, Optional<AnyType>:$limit);
@@ -164,9 +172,13 @@ def ASL_StmtRepeatOp : ASL_StmtOp<"stmt.repeat"> {
   let summary = "Repeat-until loop statement";
   let description = [{
     Repeat-until loop.
-    Input: optional limit for static limit.
+    Input: optional limit for iteration limit.
     Body in first region.
     Corresponds to S_Repeat in ASL.
+
+    Loop limit semantics: If limit is provided, it is evaluated once at loop
+    entry. Before each iteration, the limit is decremented. If it reaches zero,
+    a LimitExceeded dynamic error is raised.
   }];
 
   let arguments = (ins I1:$condition, Optional<AnyType>:$limit);

@@ -66,47 +66,7 @@ All expression types are handled: `E_Literal`, `E_Var`, `E_ATC`, `E_Binop`, `E_U
 
 The following issues relate to semantic interpretation in the MLIR dialect, not JSON serialization.
 
-=== High Severity
-
-==== Short-Circuit Semantics (RESOLVED)
-
-*Problem:* ASL specifies short-circuit evaluation for `BAND`, `BOR`, and `IMPL`. The current `Pure` trait on expression operations does not capture lazy evaluation semantics.
-
-*Resolution:* Documented in ASLRational.typ section "Short-Circuit Evaluation Semantics":
-- The flat SSA representation does not directly encode short-circuit control flow
-- Lowering passes must reconstruct short-circuit semantics using control flow (e.g., `scf.if`)
-- The representation assumes the frontend has validated safety or lowering will handle it
-
-==== Bitvector vs Integer Arithmetic (RESOLVED)
-
-*Problem:* ASL bitvector arithmetic wraps around (unsigned modular arithmetic), while integer arithmetic has unbounded precision.
-
-*Resolution:* Split polymorphic operations into type-specific variants:
-- `asl.expr.binop.int.{add,sub,mul}`: Arbitrary precision, no overflow
-- `asl.expr.binop.bits.{add,sub,mul}`: Fixed-width, unsigned wraparound (mod 2^N)
-- `asl.expr.binop.real.{add,sub,mul}`: Exact rational arithmetic
-
-The JSON importer dispatches to the appropriate operation based on operand types.
-
-=== Medium Severity
-
-==== Type Satisfaction (Frontend-Handled)
-
-*Problem:* ASL has complex type satisfaction rules distinct from structural equality. Named types use identity-based comparison with explicit subtype declarations.
-
-*Current status:* The herdtools7 frontend performs all type checking before JSON serialization. The MLIR dialect receives well-typed AST.
-
-*Recommendation:* Document that type satisfaction is verified by the herdtools7 frontend, not the MLIR dialect.
-
-==== Symbolically Evaluable Expressions (Frontend-Handled)
-
-*Problem:* ASL requires certain expressions (array lengths, bitvector widths, constraints) to be "symbolically evaluable" - involving only immutable values.
-
-*Current status:* The herdtools7 frontend verifies symbolic evaluability during type checking.
-
-*Recommendation:* Document that symbolic evaluability is verified by the herdtools7 frontend.
-
-==== Loop Limit Semantics
+==== Loop Limit Semantics (RESOLVED)
 
 *Problem:* ASL loops have optional limits with specific semantics: evaluated once, decremented each iteration, raises `LimitExceeded` at zero.
 
@@ -117,7 +77,11 @@ The JSON importer dispatches to the appropriate operation based on operand types
 | S_Repeat of stmt * expr * expr option
 ```
 
-*Recommendation:* Document loop limit semantics and `LimitExceeded` exception behavior.
+*Resolution:* Documented in ASLRational.typ section "Loop Limit Semantics" and ASLStatement.td operation descriptions:
+- Limit is evaluated once at loop entry
+- Decremented before each iteration
+- `LimitExceeded` dynamic error when limit reaches zero
+- Lowering pass responsible for implementing semantics
 
 === Low Severity
 
@@ -167,7 +131,7 @@ The JSON importer dispatches to the appropriate operation based on operand types
   [Bitvector wraparound], [High], [Dialect], [RESOLVED],
   [Type satisfaction], [Medium], [Frontend], [Documented],
   [Symbolically evaluable], [Medium], [Frontend], [Documented],
-  [Loop limits], [Medium], [Dialect], [Open],
+  [Loop limits], [Medium], [Dialect], [RESOLVED],
   [Execution graphs], [Low], [N/A], [Out of scope],
   [Real representation], [Low], [Dialect], [Open],
   [Valueless exceptions], [Low], [Dialect], [Open],
