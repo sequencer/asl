@@ -23,6 +23,7 @@
 #include "ASL/ASLDialect.h"
 #include "ASL/ASLPasses.h"
 #include "GMP/GMPDialect.h"
+#include "GMP/GMPPasses.h"
 #include "JSONImporter.h"
 
 #include "mlir/Target/Cpp/CppEmitter.h"
@@ -49,6 +50,7 @@ static llvm::cl::opt<bool>
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
   mlir::asl::registerASLPasses();
+  mlir::gmp::registerGMPPasses();
   mlir::DialectRegistry registry;
   registry.insert<mlir::asl::ASLDialect>();
   registry.insert<mlir::gmp::GMPDialect>();

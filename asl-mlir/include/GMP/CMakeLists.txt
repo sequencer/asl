@@ -10,3 +10,8 @@ mlir_tablegen(GMPDialect.h.inc -gen-dialect-decls -dialect=gmp)
 mlir_tablegen(GMPDialect.cpp.inc -gen-dialect-defs -dialect=gmp)
 
 add_public_tablegen_target(GMPIncGen)
+
+# Generate pass declarations
+set(LLVM_TARGET_DEFINITIONS GMPPasses.td)
+mlir_tablegen(GMPPasses.h.inc -gen-pass-decls -name GMP)
+add_public_tablegen_target(GMPPassIncGen)

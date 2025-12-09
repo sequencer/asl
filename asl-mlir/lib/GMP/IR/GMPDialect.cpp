@@ -10,6 +10,7 @@
 #include "GMP/GMPAttributes.h"
 #include "GMP/GMPOps.h"
 #include "GMP/GMPTypes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -41,6 +42,15 @@ Operation *GMPDialect::materializeConstant(OpBuilder &builder, Attribute value,
   if (auto qAttr = dyn_cast<QAttr>(value)) {
     if (isa<QType>(type))
       return builder.create<QConstantOp>(loc, type, qAttr);
+  }
+  // Handle standard types (i1, i32, f64) returned by comparison/conversion ops
+  if (auto intAttr = dyn_cast<IntegerAttr>(value)) {
+    if (isa<IntegerType>(type))
+      return builder.create<arith::ConstantOp>(loc, type, intAttr);
+  }
+  if (auto floatAttr = dyn_cast<FloatAttr>(value)) {
+    if (isa<FloatType>(type))
+      return builder.create<arith::ConstantOp>(loc, type, floatAttr);
   }
   return nullptr;
 }

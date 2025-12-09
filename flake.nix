@@ -89,6 +89,11 @@
                 cmake
                 ninja
                 gmp
+                (python3.withPackages (
+                  ps: with ps; [
+                    gmpy2
+                  ]
+                ))
               ];
             };
           };

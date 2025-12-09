@@ -9,6 +9,7 @@ add_llvm_executable(asl-opt
   ASLIncGen
   ASLPassIncGen
   GMPIncGen
+  GMPPassIncGen
 )
 
 llvm_update_compile_flags(asl-opt)
@@ -19,6 +20,7 @@ target_link_libraries(asl-opt PRIVATE
   MLIRASL
   MLIRGMP
   MLIRASLPass
+  MLIRGMPTransforms
   MLIROptLib
   MLIRParser
   MLIRPass

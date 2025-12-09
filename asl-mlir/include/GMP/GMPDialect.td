@@ -39,7 +39,7 @@ def GMP_Dialect : Dialect {
   let useDefaultTypePrinterParser = 1;
 
   // Dependent dialects
-  let dependentDialects = ["mlir::BuiltinDialect"];
+  let dependentDialects = ["mlir::BuiltinDialect", "mlir::arith::ArithDialect"];
 
   let extraClassDeclaration = [{
     /// Register all GMP types.
