@@ -1,0 +1,17 @@
+//===- GMPTypes.h - GMP types -----------------------------------*- C++ -*-===//
+//
+// This file is licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef GMP_GMPTYPES_H
+#define GMP_GMPTYPES_H
+
+#include "mlir/IR/Types.h"
+
+#define GET_TYPEDEF_CLASSES
+#include "GMP/GMPTypes.h.inc"
+
+#endif // GMP_GMPTYPES_H
