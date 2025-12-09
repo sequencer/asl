@@ -1,0 +1,16 @@
+// RUN: asl-json-backend --no-std %s > %t.json
+// RUN: asl-opt --json-input %t.json | FileCheck %s
+
+// CHECK: "builtin.module"() ({
+
+func main () => integer
+begin
+  let i : integer = 0;
+  let r : real = 0.0;
+  let s : string = "0.0";
+  let b : boolean = TRUE;
+  let z4 : bits(4) = '0000';
+  let o2 : bits(2) = '11';
+  let o: bit = '1';
+  return 0;
+end;

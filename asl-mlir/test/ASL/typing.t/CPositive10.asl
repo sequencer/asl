@@ -1,0 +1,10 @@
+// RUN: asl-json-backend %s > %t.json
+// RUN: asl-opt --json-input %t.json | FileCheck %s
+
+// CHECK: "builtin.module"() ({
+
+// The value of a parameter may be negative.
+func positive10{N}(x: bits(N+1), y: bits(N+2)) => bits(N*3+3)
+begin
+    return Zeros{N} :: x :: y;
+end;

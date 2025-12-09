@@ -1,0 +1,19 @@
+// RUN: asl-json-backend --no-std %s > %t.json
+// RUN: asl-opt --json-input %t.json | FileCheck %s
+
+// CHECK: module {
+
+type Nested_Type of bits(16) {
+    [15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0] all,
+    // [12, 11, 10, 9] [7, 6, 5, 4, 3, 2]
+    [12:9, 7:2] slices { // slices = [12:9, 7:2]
+        [5:2, 9:8, 7:6] sub // [7:4][12:9] slices.sub
+    },
+
+    // [12, 11, 10, 9] [7, 6, 5, 4, 3, 2]
+    [9+:4, 2+:6] slices1 {  // slices1 = [12:9, 7:2]
+        [5:2, 9:8, 7:6] sub // [7:4][12:9] slices1.sub
+    },
+
+    [7:4, 12:9] sub
+};
