@@ -304,6 +304,24 @@ ASL provides two integer division operations with distinct semantics:
   [`6 / 3`], [2], [2], [2], [Exact division],
 )
 
+==== Short-Circuit Evaluation Semantics <short_circuit_semantics>
+ASL specifies short-circuit (lazy) evaluation for boolean operators. The second operand is only evaluated if necessary to determine the result:
+
+#table(
+  columns: 4,
+  inset: 6pt,
+  [Operator], [Expression], [Short-Circuit Rule], [Example],
+  [BAND], [`A && B`], [If `A` is false, return false without evaluating `B`], [`(x != 0) && (y / x > 0)`],
+  [BOR], [`A || B`], [If `A` is true, return true without evaluating `B`], [`(x == 0) || (y / x > 0)`],
+  [IMPL], [`A ==> B`], [If `A` is false, return true without evaluating `B`], [`(x != 0) ==> (y / x > 0)`],
+)
+
+*Current representation:* The ASL dialect represents these as simple binary operations with both operands as SSA values. This flat representation does not directly encode short-circuit control flow.
+
+*Lowering responsibility:* When lowering to executable code, the lowering pass must reconstruct short-circuit semantics using control flow (e.g., `scf.if`). The flat representation assumes either:
+1. The herdtools7 frontend has validated that short-circuit semantics do not affect program correctness (no side effects in the second operand that depend on the first), or
+2. The lowering pass will generate proper control flow to implement lazy evaluation.
+
 === Unary Operator Expressions <e_unop>
 `asl.expr.unop` represents unary operator expressions:
 #table(columns: 4,

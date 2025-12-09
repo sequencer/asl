@@ -68,24 +68,14 @@ The following issues relate to semantic interpretation in the MLIR dialect, not 
 
 === High Severity
 
-==== Integer Division Semantics (RESOLVED)
-
-*Problem:* The ASL spec defines `DIV` as exact integer division, while `DIVRM` provides floor division toward negative infinity.
-
-*Resolution:* Documentation and TableGen descriptions have been updated:
-- `DIV` (`asl.expr.binop.div`): Exact integer division, undefined if not divisible
-- `DIVRM` (`asl.expr.binop.divrm`): Floor division toward negative infinity
-
-See `ASLRational.typ` section "Integer Division Semantics" for detailed documentation with examples.
-
-==== Short-Circuit Semantics
+==== Short-Circuit Semantics (RESOLVED)
 
 *Problem:* ASL specifies short-circuit evaluation for `BAND`, `BOR`, and `IMPL`. The current `Pure` trait on expression operations does not capture lazy evaluation semantics.
 
-*Recommendation:* Either:
-- Add regions for short-circuit evaluation (similar to `scf.if`)
-- Document that short-circuit semantics are handled at lowering
-- Add a `ShortCircuit` trait or attribute
+*Resolution:* Documented in ASLRational.typ section "Short-Circuit Evaluation Semantics":
+- The flat SSA representation does not directly encode short-circuit control flow
+- Lowering passes must reconstruct short-circuit semantics using control flow (e.g., `scf.if`)
+- The representation assumes the frontend has validated safety or lowering will handle it
 
 ==== Bitvector vs Integer Arithmetic
 
@@ -170,7 +160,7 @@ See `ASLRational.typ` section "Integer Division Semantics" for detailed document
   align: (left, center, left, left),
   [*Issue*], [*Severity*], [*Layer*], [*Status*],
   [Division semantics], [High], [Dialect], [RESOLVED],
-  [Short-circuit], [High], [Dialect], [Open],
+  [Short-circuit], [High], [Dialect], [RESOLVED],
   [Bitvector wraparound], [High], [Dialect], [Open],
   [Type satisfaction], [Medium], [Frontend], [Documented],
   [Symbolically evaluable], [Medium], [Frontend], [Documented],
@@ -193,10 +183,10 @@ The JSON backend is complete and correctly serializes all AST constructs from th
 ==== Resolved Issues
 
 + *Division semantics* - Documented in ASLRational.typ and TableGen
++ *Short-circuit evaluation* - Documented lowering responsibility in ASLRational.typ
 
 ==== Remaining High Severity Issues
 
-+ *Short-circuit evaluation* - `BAND`, `BOR`, `IMPL` have lazy evaluation
 + *Bitvector wraparound* - Bitvector arithmetic wraps, integer does not
 
 These require documentation or dialect changes for correct ARM specification modeling.
