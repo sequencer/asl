@@ -5,6 +5,10 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
     treefmt-nix.url = "github:numtide/treefmt-nix";
+    typix = {
+      url = "github:loqusion/typix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -42,11 +46,38 @@
               overlay
             ];
           };
+
+          typixLib = inputs.typix.lib.${system};
+
+          # Use doc building utilities from overlay
+          docsLib = pkgs.callPackage ./nix/pkgs/asl-docs.nix {
+            inherit typixLib;
+            docSrc = ./doc;
+          };
         in
         {
           _module.args.pkgs = pkgs;
 
           legacyPackages = pkgs;
+
+          packages = {
+            # Individual doc builds
+            doc-GMPRational = docsLib.docs.GMPRational;
+            doc-IR = docsLib.docs.IR;
+            doc-Pass = docsLib.docs.Pass;
+            doc-Rational = docsLib.docs.Rational;
+            doc-Development = docsLib.docs.Development;
+
+            # All docs combined
+            docs = docsLib.all;
+          };
+
+          apps = {
+            watch-docs = {
+              type = "app";
+              program = "${docsLib.watch}/bin/typst-watch";
+            };
+          };
 
           devShells = {
             default = pkgs.mkShell {
