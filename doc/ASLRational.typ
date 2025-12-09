@@ -89,6 +89,8 @@ While `asl.expr.atc.bits.bitfields` has three variants and return `!asl.bitfield
 === Real Type <t_real>
 The `asl.real` type is `!asl.real` and has no parameters.
 
+ASL reals are "mathematical rational numbers with no bounds on precision." For lowering to executable code, `!asl.real` maps to `!gmp.q` (GMP arbitrary-precision rational). This ensures exact rational arithmetic without precision loss, matching ASL semantics.
+
 === String Type <t_string>
 The `asl.string` type is `!asl.string` and has no parameters.
 

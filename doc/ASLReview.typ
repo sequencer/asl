@@ -65,26 +65,6 @@ All expression types are handled: `E_Literal`, `E_Var`, `E_ATC`, `E_Binop`, `E_U
 == Semantic Issues
 
 The following issues relate to semantic interpretation in the MLIR dialect, not JSON serialization.
-
-==== Loop Limit Semantics (RESOLVED)
-
-*Problem:* ASL loops have optional limits with specific semantics: evaluated once, decremented each iteration, raises `LimitExceeded` at zero.
-
-*herdtools7 AST:*
-```ocaml
-| S_For of { ...; limit: expr option }
-| S_While of expr * expr option * stmt
-| S_Repeat of stmt * expr * expr option
-```
-
-*Resolution:* Documented in ASLRational.typ section "Loop Limit Semantics" and ASLStatement.td operation descriptions:
-- Limit is evaluated once at loop entry
-- Decremented before each iteration
-- `LimitExceeded` dynamic error when limit reaches zero
-- Lowering pass responsible for implementing semantics
-
-=== Low Severity
-
 ==== Execution Graphs - Out of Scope
 
 *Problem:* The ASL formal semantics use execution graphs with `aslpo`, `aslctrl`, `asldata` edges for memory model analysis.
@@ -93,11 +73,13 @@ The following issues relate to semantic interpretation in the MLIR dialect, not 
 
 *Recommendation:* Document that execution graph analysis is out of scope for the current dialect.
 
-==== Real Number Representation
+==== Real Number Representation (RESOLVED)
 
 *Problem:* ASL reals are "mathematical rational numbers with no bounds on precision." The mapping to runtime representation is not documented.
 
-*Recommendation:* Document that `!asl.real` maps to `!gmp.q` (arbitrary-precision rational) for lowering.
+*Resolution:* Documented in ASLRational.typ section "Real Type":
+- `!asl.real` maps to `!gmp.q` (GMP arbitrary-precision rational) for lowering
+- Ensures exact rational arithmetic without precision loss
 
 ==== Valueless Exceptions
 
@@ -133,7 +115,7 @@ The following issues relate to semantic interpretation in the MLIR dialect, not 
   [Symbolically evaluable], [Medium], [Frontend], [Documented],
   [Loop limits], [Medium], [Dialect], [RESOLVED],
   [Execution graphs], [Low], [N/A], [Out of scope],
-  [Real representation], [Low], [Dialect], [Open],
+  [Real representation], [Low], [Dialect], [RESOLVED],
   [Valueless exceptions], [Low], [Dialect], [Open],
   [Collection constraints], [Low], [Frontend], [Documented],
   [Mixed int/real], [Low], [Dialect], [Open],
