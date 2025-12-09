@@ -8,6 +8,7 @@ add_llvm_executable(asl-opt
   DEPENDS
   ASLIncGen
   ASLPassIncGen
+  GMPIncGen
 )
 
 llvm_update_compile_flags(asl-opt)
@@ -16,6 +17,7 @@ target_link_libraries(asl-opt PRIVATE
   ${dialect_libs}
   ${conversion_libs}
   MLIRASL
+  MLIRGMP
   MLIRASLPass
   MLIROptLib
   MLIRParser

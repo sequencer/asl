@@ -36,6 +36,8 @@ set(AJB_TOOLS_DIR ${AJB_TOOLS_DIR} CACHE PATH "Directory containing asl-json-bac
 set(ASL_TOOLS_DIR ${ASL_TOOLS_DIR} CACHE PATH "Directory containing built ASL MLIR tools" FORCE)
 
 add_subdirectory(include/ASL)
+add_subdirectory(include/GMP)
 add_subdirectory(lib/ASL)
+add_subdirectory(lib/GMP)
 add_subdirectory(asl-opt)
 add_subdirectory(test)
