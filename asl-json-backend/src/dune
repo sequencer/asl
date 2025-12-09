@@ -1,0 +1,9 @@
+(executable
+ (name JsonBackend)
+ (libraries
+  herdtools7.asllib
+  yojson))
+
+(install
+ (section bin)
+ (files JsonBackend.exe))
