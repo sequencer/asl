@@ -19,16 +19,21 @@ Follow KISS (Keep It Simple, Stupid) and DRY
 Every non-trivial task must treat these as separate artifacts:
 
 1. Documentation
-  - ARM herdtools7 asllib(offical): https://github.com/herd/herdtools7/tree/master/asllib;
-  - ASL Specification(LaTeX): https://github.com/herd/herdtools7/tree/master/asllib/doc
-  - Intel ASL Interpreter(old version, to analyze the transform): https://github.com/IntelLabs/asl-interpreter/tree/master/libASL/ {xform_*.ml, backend_c.ml}
+  - ARM herdtools7 asllib (official): https://github.com/herd/herdtools7/tree/master/asllib
+  - ASL Specification (LaTeX): https://github.com/herd/herdtools7/tree/master/asllib/doc
+  - Intel ASL Interpreter (old version, to analyze the transform): https://github.com/IntelLabs/asl-interpreter/tree/master/libASL/ {xform_*.ml, backend_c.ml}
 
-2. Documentation
+2. Pinned Dependencies
+  - herdtools7 commit: `d7d6bdd24f8680c4abf2df3a3e54a9d98494321e`
+  - When referencing herdtools7 AST or spec, always use this pinned commit
+  - See `nix/pkgs/herdtools7.nix` for the authoritative version
+
+3. Documentation
   - This file;
   - Typst files in the `doc` folder;
   - Code comments
 
-3. Verification
+4. Verification
   - Test folder is in asl-mlir/test, you should run specific test for each time when doing code change; 
 
 ## Documentation

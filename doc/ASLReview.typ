@@ -5,264 +5,208 @@
 
 = ASL Dialect Design Review
 
-This document analyzes the ASL dialect implementation against the official herdtools7 ASL specification, identifying design pitfalls and recommendations.
+This document analyzes the ASL dialect implementation against the herdtools7 ASL specification, identifying design considerations and recommendations.
 
 == Review Methodology
 
 The review compares:
 - herdtools7 ASL specification (Types.tex, Expressions.tex, Statements.tex, Slicing.tex, RelationsOnTypes.tex)
-- herdtools7 Operations.ml implementation
+- herdtools7 AST.mli at pinned commit `d7d6bdd24f8680c4abf2df3a3e54a9d98494321e`
 - Current ASLRational.typ documentation
 - ASL dialect TableGen definitions
+- JSON backend implementation
 
-== High Severity Issues
+== JSON Backend Coverage
 
-=== Integer Division Semantics Mismatch
+The JSON backend (`asl-json-backend`) correctly serializes all AST constructs from the pinned herdtools7 version.
 
-*Problem:* The ASL spec defines `DIV` as exact division (returns `None` if not divisible), but the dialect documentation describes `asl.expr.binop.div` as integer division without clarifying which semantics apply.
+=== Binary Operators - Complete
 
-*herdtools7 spec:*
-- `DIV` - exact division only (fails if not exact)
-- `DIVRM` - floor division toward negative infinity
+All 24 binary operators from the pinned herdtools7 version are handled:
 
-*Current dialect:*
-- `asl.expr.binop.div` - "Integer division" (ambiguous)
-- `asl.expr.binop.divrm` - "Integer division with rounding towards negative infinity"
+#table(
+  columns: (auto, auto, auto),
+  inset: 6pt,
+  align: (left, left, center),
+  [*Category*], [*Operators*], [*Status*],
+  [Arithmetic], [`PLUS`, `MINUS`, `MUL`, `DIV`, `DIVRM`, `MOD`, `POW`, `RDIV`], [OK],
+  [Bitwise], [`AND`, `OR`, `XOR`, `SHL`, `SHR`], [OK],
+  [Boolean], [`BAND`, `BOR`, `BEQ`, `IMPL`], [OK],
+  [Comparison], [`EQ_OP`, `NEQ`, `LT`, `LEQ`, `GT`, `GEQ`], [OK],
+  [Other], [`CONCAT`], [OK],
+)
 
-*Recommendation:* Document that `DIV` in ASL requires exact division. Add validation or explicit failure handling for non-exact division cases.
+Note: `BIC` (bit clear) is not present in the pinned herdtools7 version. It was added in a later commit.
 
-=== Short-Circuit Semantics Not Captured
+=== Unary Operators - Complete
 
-*Problem:* ASL specifies short-circuit evaluation for `&&`, `||`, and `==>`. The current `Pure` trait on all expression operations may not properly capture these semantics.
+#table(
+  columns: (auto, auto, auto),
+  inset: 6pt,
+  align: (left, left, center),
+  [*Operator*], [*Description*], [*Status*],
+  [`BNOT`], [Boolean inversion], [OK],
+  [`NEG`], [Integer/real negation], [OK],
+  [`NOT`], [Bitvector bitwise inversion], [OK],
+)
 
-*herdtools7 spec:*
+=== Types - Complete
+
+All type constructors are handled: `T_Int`, `T_Bits`, `T_Real`, `T_String`, `T_Bool`, `T_Enum`, `T_Tuple`, `T_Array`, `T_Record`, `T_Exception`, `T_Collection`, `T_Named`.
+
+=== Statements - Complete
+
+All statement types are handled: `S_Pass`, `S_Seq`, `S_Decl`, `S_Assign`, `S_Call`, `S_Return`, `S_Cond`, `S_Assert`, `S_For`, `S_While`, `S_Repeat`, `S_Throw`, `S_Try`, `S_Print`, `S_Unreachable`, `S_Pragma`.
+
+=== Expressions - Complete
+
+All expression types are handled: `E_Literal`, `E_Var`, `E_ATC`, `E_Binop`, `E_Unop`, `E_Call`, `E_Slice`, `E_Cond`, `E_GetArray`, `E_GetEnumArray`, `E_GetField`, `E_GetFields`, `E_GetCollectionFields`, `E_GetItem`, `E_Record`, `E_Tuple`, `E_Array`, `E_EnumArray`, `E_Arbitrary`, `E_Pattern`.
+
+== Semantic Issues
+
+The following issues relate to semantic interpretation in the MLIR dialect, not JSON serialization.
+
+=== High Severity
+
+==== Integer Division Semantics
+
+*Problem:* The ASL spec defines `DIV` as exact integer division, while `DIVRM` provides floor division toward negative infinity. The dialect documentation does not clarify these semantics.
+
+*herdtools7 AST.mli:*
+```ocaml
+| `DIV      (** Integer division *)
+| `DIVRM    (** Inexact integer division, with rounding towards negative infinity *)
 ```
-Special short-circuit semantics for &&, ||, and ==>
-```
 
-*Current dialect:* `ASL_BinopBandOp`, `ASL_BinopBorOp`, `ASL_BinopImplOp` are all marked `Pure` without special handling.
+*Recommendation:* Document that:
+- `DIV` performs exact integer division (result undefined if not divisible)
+- `DIVRM` performs floor division (rounds toward negative infinity)
+
+==== Short-Circuit Semantics
+
+*Problem:* ASL specifies short-circuit evaluation for `BAND`, `BOR`, and `IMPL`. The current `Pure` trait on expression operations does not capture lazy evaluation semantics.
 
 *Recommendation:* Either:
-- Add regions for short-circuit evaluation (like `scf.if`)
-- Document that short-circuit semantics are handled at the lowering level
+- Add regions for short-circuit evaluation (similar to `scf.if`)
+- Document that short-circuit semantics are handled at lowering
 - Add a `ShortCircuit` trait or attribute
 
-=== Bitvector Operations vs Integer Operations
+==== Bitvector vs Integer Arithmetic
 
-*Problem:* ASL specifies bitvector ADD/SUB as "unsigned arithmetic with wraparound" but integer ADD/SUB have no bounds. The dialect uses `any` types for many operations.
+*Problem:* ASL bitvector arithmetic wraps around (unsigned modular arithmetic), while integer arithmetic has unbounded precision. The dialect uses `AnyType` for arithmetic operations without documenting type-dependent behavior.
 
-*herdtools7 spec:*
-```
-Bit vectors: ADD, SUB (unsigned arithmetic with wraparound)
-Integer: ADD, SUB, MUL, DIV (exact), DIVRM, MOD, POW, SHL, SHR
-```
+*Recommendation:* Document type-dependent semantics:
+- `!asl.int`: Arbitrary precision, no overflow
+- `!asl.bits`: Fixed-width, unsigned wraparound
 
-*Current dialect:*
-```tablegen
-def ASL_BinopPlusOp : ASL_ExprOp<"expr.binop.plus"> {
-  let arguments = (ins AnyType:$lhs, AnyType:$rhs);
-```
+=== Medium Severity
 
-*Recommendation:* Either:
-- Add type-specific operations (`asl.expr.binop.bits.add`, `asl.expr.binop.int.add`)
-- Add verifiers to check type compatibility
-- Document type-dependent semantics clearly
+==== Type Satisfaction (Frontend-Handled)
 
-== Medium Severity Issues
+*Problem:* ASL has complex type satisfaction rules distinct from structural equality. Named types use identity-based comparison with explicit subtype declarations.
 
-=== Missing BIC (Bit Clear) Operation
+*Current status:* The herdtools7 frontend performs all type checking before JSON serialization. The MLIR dialect receives well-typed AST.
 
-*Problem:* The ASL spec includes `BIC` (bitwise AND with complement), but this operation is not present in the dialect.
+*Recommendation:* Document that type satisfaction is verified by the herdtools7 frontend, not the MLIR dialect.
 
-*herdtools7 spec:*
-```
-BIC - AND with complement (a AND NOT b)
-```
+==== Symbolically Evaluable Expressions (Frontend-Handled)
 
-*Current dialect:* Missing `asl.expr.binop.bic`
+*Problem:* ASL requires certain expressions (array lengths, bitvector widths, constraints) to be "symbolically evaluable" - involving only immutable values.
 
-*Recommendation:* Add `BIC` operation or document that it should be lowered to `AND(a, NOT(b))` during parsing.
+*Current status:* The herdtools7 frontend verifies symbolic evaluability during type checking.
 
-=== Type Satisfaction vs Type Equality
+*Recommendation:* Document that symbolic evaluability is verified by the herdtools7 frontend.
 
-*Problem:* ASL has a complex type satisfaction relation distinct from type equality. Named types have identity-based comparison. The dialect does not model this.
+==== Loop Limit Semantics
 
-*herdtools7 spec:*
-```
-Named types maintaining strict identity-based incompatibility
-except through explicit supertype relationships
-Type satisfaction: A type satisfies another if it can be used
-where the second type is expected
-Subtype satisfaction: Stricter than simple subtyping
+*Problem:* ASL loops have optional limits with specific semantics: evaluated once, decremented each iteration, raises `LimitExceeded` at zero.
+
+*herdtools7 AST:*
+```ocaml
+| S_For of { ...; limit: expr option }
+| S_While of expr * expr option * stmt
+| S_Repeat of stmt * expr * expr option
 ```
 
-*Current dialect:* `ASL_NamedType` has an optional `resolved_type` but no subtype hierarchy or satisfaction checking.
+*Recommendation:* Document loop limit semantics and `LimitExceeded` exception behavior.
 
-*Recommendation:* Add:
-- Subtype declaration operations
-- Type satisfaction verification
-- Or document these are checked by herdtools7 frontend only
+=== Low Severity
 
-=== Symbolically Evaluable Expressions Not Distinguished
+==== Execution Graphs - Out of Scope
 
-*Problem:* ASL requires certain expressions (array lengths, bitvector widths, constraint expressions) to be "symbolically evaluable" - only involving immutable values. The dialect does not distinguish these.
+*Problem:* The ASL formal semantics use execution graphs with `aslpo`, `aslctrl`, `asldata` edges for memory model analysis.
 
-*herdtools7 spec:*
-```
-An expression is symbolically evaluable if its evaluation
-only involves immutable values
-Expressions appearing in integer constraints must be both
-symbolically evaluable and constrained integer types
-```
+*Current status:* The herdtools7 AST does not include execution graph types. This is a semantic interpretation layer above the AST.
 
-*Current dialect:* No distinction between symbolically evaluable and runtime expressions.
+*Recommendation:* Document that execution graph analysis is out of scope for the current dialect.
 
-*Recommendation:* Add a trait or marker for operations that must be symbolically evaluable, enabling compile-time verification.
+==== Real Number Representation
 
-=== Loop Limit Semantics Incomplete
+*Problem:* ASL reals are "mathematical rational numbers with no bounds on precision." The mapping to runtime representation is not documented.
 
-*Problem:* ASL loops have mandatory limits with specific decrement semantics. The current dialect has optional limits without specifying behavior.
+*Recommendation:* Document that `!asl.real` maps to `!gmp.q` (arbitrary-precision rational) for lowering.
 
-*herdtools7 spec:*
-```
-Limit checking: Evaluates limit once, decrements each iteration;
-raises LimitExceeded at zero
-```
+==== Valueless Exceptions
 
-*Current dialect:*
-```tablegen
-let arguments = (ins ASL_IntType:$start, ASL_IntType:$end, optional<...>:$limit);
-```
+*Problem:* ASL exceptions can be valueless (marked with `-`). The dialect models this as empty field lists.
 
-*Recommendation:* Either:
-- Make limit mandatory (per ASL spec)
-- Document default limit behavior
-- Add `LimitExceeded` exception handling
+*Recommendation:* Document that valueless exceptions use empty `fields` array.
 
-== Low Severity Issues
+==== Collection Type Constraints
 
-=== Execution Graph / Side Effects Not Modeled
+*Problem:* ASL collections are global-only with bitvector fields exclusively. These constraints are not enforced in the dialect.
 
-*Problem:* ASL's formal semantics use execution graphs with `aslpo`, `aslctrl`, `asldata` edges for memory model analysis. The current dialect has no representation for these.
+*Current status:* The herdtools7 frontend enforces these constraints.
 
-*herdtools7 spec:*
-```
-Graph composition uses parallel (||) and ordered operators
-to track dependencies
-Edge types: aslpo (program order), aslctrl (control flow),
-asldata (data dependencies)
-```
+*Recommendation:* Document that collection constraints are frontend-verified.
 
-*Current dialect:* No execution graph representation.
+==== Mixed Integer/Real Operations
 
-*Recommendation:* If the goal is formal verification or memory model analysis, add:
-- An execution graph type or attribute
-- Operations for graph composition
-- Alternatively, document that this is out of scope
+*Problem:* ASL supports multiplication between integers and rationals. Type coercion semantics are undocumented.
 
-=== Real Number Representation Unclear
-
-*Problem:* ASL specifies reals as "mathematical rational numbers with no bounds on precision or magnitude." The dialect uses `!asl.real` but does not specify representation.
-
-*herdtools7 spec:*
-```
-Real Type: Mathematical rational numbers with no bounds
-on precision or magnitude
-```
-
-*Current dialect:* `!asl.real` with no parameters, literals stored as string (Q.to_string).
-
-*GMP dialect:* Has `!gmp.q` for rationals.
-
-*Recommendation:* Document that `!asl.real` is implemented as arbitrary-precision rational (Q) not floating-point, and how it maps to `!gmp.q`.
-
-=== Exception Type Structure
-
-*Problem:* ASL exceptions can be either records with fields or valueless (marked with `-`). The current dialect only models the record case.
-
-*herdtools7 spec:*
-```
-Exception Types: Similar to records; carry values in fields
-or marked with - for valueless exceptions
-```
-
-*Current dialect:*
-```tablegen
-def ASL_ExceptionType : ASL_Type<"Exception", "exception"> {
-  let parameters = (ins ArrayAttr:$fields);
-}
-```
-
-*Recommendation:* Add support for valueless exceptions (empty fields or special marker).
-
-=== Collection Type Constraints
-
-*Problem:* ASL collections are global-only with bitvector fields exclusively. These constraints are not enforced.
-
-*herdtools7 spec:*
-```
-Collection Types: Global-only structured types with
-bitvector fields exclusively
-```
-
-*Current dialect:* `ASL_CollectionType` has generic `ArrayAttr:$fields` without bitvector constraint.
-
-*Recommendation:* Add verifier to ensure collection fields are bitvector types.
-
-=== Missing E_GetCollectionFields Implementation Details
-
-*Problem:* The documentation mentions this operation but the L-expression counterpart `LE_SetCollectionFields` takes no inputs, which seems inconsistent.
-
-*Current dialect:*
-```
-[LE_SetCollectionFields], [asl.lexpr.set_collection_fields], [], [!asl.lexpr],
-```
-
-*Recommendation:* Review whether collection field operations should take inputs or rely entirely on attributes.
-
-=== Mixed Integer/Real Multiplication Not Documented
-
-*Problem:* ASL supports multiplication between integers and rationals. The dialect does not document this cross-type operation.
-
-*herdtools7 spec:*
-```
-Mixed int/real: Multiplication between integers and rationals
-```
-
-*Current dialect:* `asl.expr.binop.mul` uses `AnyType` but semantics are undocumented.
-
-*Recommendation:* Document mixed-type operation semantics and expected type coercion.
+*Recommendation:* Document that integer operands are promoted to rational for mixed-type multiplication.
 
 == Summary
 
 #table(
-  columns: (auto, auto, auto),
-  inset: 8pt,
-  align: (left, center, left),
-  [*Issue*], [*Severity*], [*Action*],
-  [Division semantics], [High], [Document exact vs floor],
-  [Short-circuit], [High], [Add trait/region],
-  [Bitvector wraparound], [High], [Add type-specific ops],
-  [Missing BIC], [Medium], [Add op or document lowering],
-  [Type satisfaction], [Medium], [Add verification],
-  [Symbolically evaluable], [Medium], [Add trait],
-  [Loop limits], [Medium], [Make mandatory],
-  [Execution graphs], [Low], [Document scope],
-  [Real representation], [Low], [Document mapping],
-  [Valueless exceptions], [Low], [Add support],
-  [Collection constraints], [Low], [Add verifier],
-  [Collection fields], [Low], [Review consistency],
-  [Mixed int/real], [Low], [Document semantics],
+  columns: (auto, auto, auto, auto),
+  inset: 6pt,
+  align: (left, center, left, left),
+  [*Issue*], [*Severity*], [*Layer*], [*Action*],
+  [Division semantics], [High], [Dialect], [Document exact vs floor],
+  [Short-circuit], [High], [Dialect], [Add trait or document],
+  [Bitvector wraparound], [High], [Dialect], [Document type semantics],
+  [Type satisfaction], [Medium], [Frontend], [Document frontend handles],
+  [Symbolically evaluable], [Medium], [Frontend], [Document frontend handles],
+  [Loop limits], [Medium], [Dialect], [Document semantics],
+  [Execution graphs], [Low], [N/A], [Document out of scope],
+  [Real representation], [Low], [Dialect], [Document GMP mapping],
+  [Valueless exceptions], [Low], [Dialect], [Document empty fields],
+  [Collection constraints], [Low], [Frontend], [Document frontend handles],
+  [Mixed int/real], [Low], [Dialect], [Document coercion],
 )
 
 == Conclusion
 
-The most critical issues are:
+=== JSON Backend
 
-+ *Division semantics* - `DIV` in ASL is exact division, not truncated division
-+ *Short-circuit evaluation* - Boolean operators have lazy evaluation semantics
-+ *Bitvector wraparound* - Bitvector arithmetic wraps, integer arithmetic does not
+The JSON backend is complete and correctly serializes all AST constructs from the pinned herdtools7 version (`d7d6bdd24f8680c4abf2df3a3e54a9d98494321e`).
 
-These affect correctness when modeling ARM architecture specifications. The medium severity issues around type satisfaction and symbolically evaluable expressions affect compile-time verification capabilities.
+=== MLIR Dialect
 
-The low severity issues are mostly documentation gaps that should be addressed for completeness but do not affect functional correctness.
+The high severity issues affect semantic correctness:
+
++ *Division semantics* - `DIV` is exact division, `DIVRM` is floor division
++ *Short-circuit evaluation* - `BAND`, `BOR`, `IMPL` have lazy evaluation
++ *Bitvector wraparound* - Bitvector arithmetic wraps, integer does not
+
+These require documentation or dialect changes for correct ARM specification modeling.
+
+=== Frontend-Handled Features
+
+Several concerns are addressed by the herdtools7 frontend before JSON serialization:
+- Type satisfaction and subtyping
+- Symbolic evaluability verification
+- Collection type constraints
+
+The MLIR dialect can rely on the frontend for these guarantees.
