@@ -169,6 +169,11 @@ OpFoldResult ZNegOp::fold(FoldAdaptor adaptor) {
     mpz_neg(result.get(), val.get());
     return ZAttr::get(getContext(), result.toString());
   }
+
+  // neg(neg(x)) -> x
+  if (auto negOp = getOperand().getDefiningOp<ZNegOp>())
+    return negOp.getOperand();
+
   return {};
 }
 
@@ -183,6 +188,20 @@ OpFoldResult ZAbsOp::fold(FoldAdaptor adaptor) {
     mpz_abs(result.get(), val.get());
     return ZAttr::get(getContext(), result.toString());
   }
+
+  // abs(abs(x)) -> abs(x)
+  if (auto absOp = getOperand().getDefiningOp<ZAbsOp>())
+    return getOperand();
+
+  // abs(neg(x)) -> abs(x)
+  if (auto negOp = getOperand().getDefiningOp<ZNegOp>()) {
+    // Return a new abs op on the inner operand (this is not a direct fold,
+    // but we can canonicalize by rebuilding)
+    // Actually, we just return the inner operand to let abs be applied to it
+    // We can't really fold this directly, but we could use a rewrite pattern.
+    // For now, skip this optimization since it requires creating new ops.
+  }
+
   return {};
 }
 
@@ -781,6 +800,11 @@ OpFoldResult ZLogNotOp::fold(FoldAdaptor adaptor) {
     mpz_com(result.get(), val.get());
     return ZAttr::get(getContext(), result.toString());
   }
+
+  // lognot(lognot(x)) -> x
+  if (auto notOp = getOperand().getDefiningOp<ZLogNotOp>())
+    return notOp.getOperand();
+
   return {};
 }
 
@@ -1406,23 +1430,19 @@ public:
   }
 
   bool isZero() const {
-    return mpz_sgn(mpq_numref(value)) == 0 &&
-           mpz_sgn(mpq_denref(value)) != 0;
+    return mpz_sgn(mpq_numref(value)) == 0 && mpz_sgn(mpq_denref(value)) != 0;
   }
 
   bool isPosInf() const {
-    return mpz_sgn(mpq_numref(value)) > 0 &&
-           mpz_sgn(mpq_denref(value)) == 0;
+    return mpz_sgn(mpq_numref(value)) > 0 && mpz_sgn(mpq_denref(value)) == 0;
   }
 
   bool isNegInf() const {
-    return mpz_sgn(mpq_numref(value)) < 0 &&
-           mpz_sgn(mpq_denref(value)) == 0;
+    return mpz_sgn(mpq_numref(value)) < 0 && mpz_sgn(mpq_denref(value)) == 0;
   }
 
   bool isUndef() const {
-    return mpz_sgn(mpq_numref(value)) == 0 &&
-           mpz_sgn(mpq_denref(value)) == 0;
+    return mpz_sgn(mpq_numref(value)) == 0 && mpz_sgn(mpq_denref(value)) == 0;
   }
 
   bool isReal() const { return mpz_sgn(mpq_denref(value)) != 0; }
@@ -1559,9 +1579,11 @@ OpFoldResult QMulOp::fold(FoldAdaptor adaptor) {
     return lhsAttr;
 
   // q * 1 -> q
-  if (rhsAttr && rhsAttr.getNumerator() == "1" && rhsAttr.getDenominator() == "1")
+  if (rhsAttr && rhsAttr.getNumerator() == "1" &&
+      rhsAttr.getDenominator() == "1")
     return getLhs();
-  if (lhsAttr && lhsAttr.getNumerator() == "1" && lhsAttr.getDenominator() == "1")
+  if (lhsAttr && lhsAttr.getNumerator() == "1" &&
+      lhsAttr.getDenominator() == "1")
     return getRhs();
 
   return {};
@@ -1585,7 +1607,8 @@ OpFoldResult QDivOp::fold(FoldAdaptor adaptor) {
   }
 
   // q / 1 -> q
-  if (rhsAttr && rhsAttr.getNumerator() == "1" && rhsAttr.getDenominator() == "1")
+  if (rhsAttr && rhsAttr.getNumerator() == "1" &&
+      rhsAttr.getDenominator() == "1")
     return getLhs();
 
   // 0 / q -> 0 (for non-zero real q)
@@ -1614,6 +1637,11 @@ OpFoldResult QNegOp::fold(FoldAdaptor adaptor) {
     if (attr.isNegInf())
       return QAttr::get(getContext(), "1", "0");
   }
+
+  // neg(neg(q)) -> q
+  if (auto negOp = getOperand().getDefiningOp<QNegOp>())
+    return negOp.getOperand();
+
   return {};
 }
 
@@ -1633,6 +1661,11 @@ OpFoldResult QAbsOp::fold(FoldAdaptor adaptor) {
     if (attr.isPosInf() || attr.isNegInf())
       return QAttr::get(getContext(), "1", "0");
   }
+
+  // abs(abs(q)) -> abs(q)
+  if (auto absOp = getOperand().getDefiningOp<QAbsOp>())
+    return getOperand();
+
   return {};
 }
 
@@ -1655,6 +1688,11 @@ OpFoldResult QInvOp::fold(FoldAdaptor adaptor) {
     if (attr.isPosInf() || attr.isNegInf())
       return QAttr::get(getContext(), "0", "1");
   }
+
+  // inv(inv(q)) -> q
+  if (auto invOp = getOperand().getDefiningOp<QInvOp>())
+    return invOp.getOperand();
+
   return {};
 }
 
