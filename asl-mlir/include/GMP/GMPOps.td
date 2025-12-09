@@ -871,6 +871,342 @@ def GMP_ZSignedExtractOp : GMP_Op<"z.signed_extract", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// Z Number Theory Operations
+//===----------------------------------------------------------------------===//
+
+def GMP_ZGcdOp : GMP_Op<"z.gcd", [Pure, Commutative]> {
+  let summary = "Greatest common divisor of two integers";
+  let description = [{
+    Computes the greatest common divisor of two arbitrary precision integers.
+    The result is always non-negative.
+    This is equivalent to GMP's mpz_gcd.
+
+    Example:
+    ```mlir
+    %gcd = gmp.z.gcd %a, %b  // gcd(12, 8) = 4
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZGcdExtOp : GMP_Op<"z.gcdext", [Pure]> {
+  let summary = "Extended GCD returning gcd and Bezout coefficients";
+  let description = [{
+    Computes the extended GCD: returns (g, s, t) such that g = gcd(a, b)
+    and g = a*s + b*t. This is equivalent to GMP's mpz_gcdext.
+
+    Example:
+    ```mlir
+    %g, %s, %t = gmp.z.gcdext %a, %b
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs GMP_ZType:$gcd, GMP_ZType:$s, GMP_ZType:$t);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZLcmOp : GMP_Op<"z.lcm", [Pure, Commutative]> {
+  let summary = "Least common multiple of two integers";
+  let description = [{
+    Computes the least common multiple of two arbitrary precision integers.
+    The result is always non-negative.
+    This is equivalent to GMP's mpz_lcm.
+
+    Example:
+    ```mlir
+    %lcm = gmp.z.lcm %a, %b  // lcm(4, 6) = 12
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$lhs, GMP_ZType:$rhs);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Z Modular Arithmetic Operations
+//===----------------------------------------------------------------------===//
+
+def GMP_ZPowmOp : GMP_Op<"z.powm", [Pure]> {
+  let summary = "Modular exponentiation";
+  let description = [{
+    Computes (base^exp) mod modulus. This is equivalent to GMP's mpz_powm.
+    The exponent can be negative if an inverse exists.
+
+    Example:
+    ```mlir
+    %result = gmp.z.powm %base, %exp, %mod  // base^exp mod mod
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$base, GMP_ZType:$exp, GMP_ZType:$modulus);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$base `,` $exp `,` $modulus attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZPowmSecOp : GMP_Op<"z.powm_sec", [Pure]> {
+  let summary = "Secure modular exponentiation (constant-time)";
+  let description = [{
+    Computes (base^exp) mod modulus using a constant-time algorithm
+    to prevent timing side-channel attacks. The exponent must be positive
+    and the modulus must be odd.
+    This is equivalent to GMP's mpz_powm_sec.
+
+    Example:
+    ```mlir
+    %result = gmp.z.powm_sec %base, %exp, %mod
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$base, GMP_ZType:$exp, GMP_ZType:$modulus);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$base `,` $exp `,` $modulus attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZInvertOp : GMP_Op<"z.invert", [Pure]> {
+  let summary = "Modular multiplicative inverse";
+  let description = [{
+    Computes the modular multiplicative inverse of operand modulo modulus.
+    Returns the inverse x such that (operand * x) mod modulus = 1.
+    The second result indicates whether the inverse exists (true) or not (false).
+    This is equivalent to GMP's mpz_invert.
+
+    Example:
+    ```mlir
+    %inv, %exists = gmp.z.invert %a, %mod
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$operand, GMP_ZType:$modulus);
+  let results = (outs GMP_ZType:$result, I1:$exists);
+
+  let assemblyFormat = "$operand `,` $modulus attr-dict";
+
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Z Primality Testing Operations
+//===----------------------------------------------------------------------===//
+
+def GMP_ZProbabPrimeOp : GMP_Op<"z.probab_prime", [Pure]> {
+  let summary = "Probabilistic primality test";
+  let description = [{
+    Performs Miller-Rabin primality test with specified number of rounds.
+    Returns:
+    - 2 if definitely prime
+    - 1 if probably prime
+    - 0 if definitely composite
+    This is equivalent to GMP's mpz_probab_prime_p.
+
+    Example:
+    ```mlir
+    %result = gmp.z.probab_prime %n, %reps  // reps = number of test rounds
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$operand, I32:$reps);
+  let results = (outs I32:$result);
+
+  let assemblyFormat = "$operand `,` $reps attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZNextPrimeOp : GMP_Op<"z.nextprime", [Pure]> {
+  let summary = "Find next prime number";
+  let description = [{
+    Finds the next prime greater than operand.
+    This is equivalent to GMP's mpz_nextprime.
+
+    Example:
+    ```mlir
+    %next = gmp.z.nextprime %n  // nextprime(10) = 11
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$operand);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Z Power and Root Operations
+//===----------------------------------------------------------------------===//
+
+def GMP_ZPowOp : GMP_Op<"z.pow", [Pure]> {
+  let summary = "Integer exponentiation";
+  let description = [{
+    Computes base raised to the power of exp.
+    The exponent must be non-negative.
+    This is equivalent to GMP's mpz_pow_ui.
+
+    Example:
+    ```mlir
+    %result = gmp.z.pow %base, %exp  // 2^10 = 1024
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$base, I64:$exp);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$base `,` $exp attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZSqrtOp : GMP_Op<"z.sqrt", [Pure]> {
+  let summary = "Integer square root";
+  let description = [{
+    Computes the integer square root (floor of the true square root).
+    The operand must be non-negative.
+    This is equivalent to GMP's mpz_sqrt.
+
+    Example:
+    ```mlir
+    %root = gmp.z.sqrt %n  // sqrt(10) = 3
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$operand);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZSqrtRemOp : GMP_Op<"z.sqrt_rem", [Pure]> {
+  let summary = "Integer square root with remainder";
+  let description = [{
+    Computes both the integer square root and the remainder.
+    Returns (root, rem) where operand = root^2 + rem.
+    The operand must be non-negative.
+    This is equivalent to GMP's mpz_sqrtrem.
+
+    Example:
+    ```mlir
+    %root, %rem = gmp.z.sqrt_rem %n  // sqrt_rem(10) = (3, 1)
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$operand);
+  let results = (outs GMP_ZType:$root, GMP_ZType:$remainder);
+
+  let assemblyFormat = "$operand attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZRootOp : GMP_Op<"z.root", [Pure]> {
+  let summary = "Integer nth root";
+  let description = [{
+    Computes the integer nth root (floor of the true nth root).
+    The operand must be non-negative for even n.
+    This is equivalent to GMP's mpz_root.
+
+    Example:
+    ```mlir
+    %root = gmp.z.root %n, %k  // root(27, 3) = 3
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$operand, I64:$n);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$operand `,` $n attr-dict";
+
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Z Factorial and Combinatorics Operations
+//===----------------------------------------------------------------------===//
+
+def GMP_ZFacOp : GMP_Op<"z.fac", [Pure]> {
+  let summary = "Factorial";
+  let description = [{
+    Computes n! (factorial of n).
+    The operand must be non-negative.
+    This is equivalent to GMP's mpz_fac_ui.
+
+    Example:
+    ```mlir
+    %result = gmp.z.fac %n  // fac(5) = 120
+    ```
+  }];
+
+  let arguments = (ins I64:$n);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$n attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZBinOp : GMP_Op<"z.bin", [Pure]> {
+  let summary = "Binomial coefficient";
+  let description = [{
+    Computes the binomial coefficient C(n, k) = n! / (k! * (n-k)!).
+    This is equivalent to GMP's mpz_bin_ui.
+
+    Example:
+    ```mlir
+    %result = gmp.z.bin %n, %k  // bin(5, 2) = 10
+    ```
+  }];
+
+  let arguments = (ins GMP_ZType:$n, I64:$k);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$n `,` $k attr-dict";
+
+  let hasFolder = 1;
+}
+
+def GMP_ZFibOp : GMP_Op<"z.fib", [Pure]> {
+  let summary = "Fibonacci number";
+  let description = [{
+    Computes the nth Fibonacci number F(n).
+    This is equivalent to GMP's mpz_fib_ui.
+
+    Example:
+    ```mlir
+    %result = gmp.z.fib %n  // fib(10) = 55
+    ```
+  }];
+
+  let arguments = (ins I64:$n);
+  let results = (outs GMP_ZType:$result);
+
+  let assemblyFormat = "$n attr-dict";
+
+  let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // Q Module: Rational Operations
 //===----------------------------------------------------------------------===//
 

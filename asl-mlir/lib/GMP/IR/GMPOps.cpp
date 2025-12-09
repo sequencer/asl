@@ -1002,6 +1002,368 @@ OpFoldResult ZSignedExtractOp::fold(FoldAdaptor adaptor) {
 }
 
 //===----------------------------------------------------------------------===//
+// Z Number Theory Operations
+//===----------------------------------------------------------------------===//
+
+//===----------------------------------------------------------------------===//
+// ZGcdOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZGcdOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr) {
+    MPZValue lhs(lhsAttr.getValue());
+    MPZValue rhs(rhsAttr.getValue());
+    MPZValue result;
+    mpz_gcd(result.get(), lhs.get(), rhs.get());
+    return ZAttr::get(getContext(), result.toString());
+  }
+
+  // gcd(x, 0) -> |x|
+  if (rhsAttr && rhsAttr.isZero())
+    return ZAttr::get(getContext(),
+                      lhsAttr ? (lhsAttr.isNegative()
+                                    ? lhsAttr.getValue().substr(1)
+                                    : lhsAttr.getValue())
+                              : "0");
+  if (lhsAttr && lhsAttr.isZero())
+    return ZAttr::get(getContext(),
+                      rhsAttr ? (rhsAttr.isNegative()
+                                    ? rhsAttr.getValue().substr(1)
+                                    : rhsAttr.getValue())
+                              : "0");
+
+  // gcd(x, x) -> |x|
+  if (getLhs() == getRhs())
+    return getLhs();
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZGcdExtOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult ZGcdExtOp::fold(FoldAdaptor adaptor,
+                              SmallVectorImpl<OpFoldResult> &results) {
+  auto lhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr) {
+    MPZValue lhs(lhsAttr.getValue());
+    MPZValue rhs(rhsAttr.getValue());
+    MPZValue gcd, s, t;
+    mpz_gcdext(gcd.get(), s.get(), t.get(), lhs.get(), rhs.get());
+    results.push_back(ZAttr::get(getContext(), gcd.toString()));
+    results.push_back(ZAttr::get(getContext(), s.toString()));
+    results.push_back(ZAttr::get(getContext(), t.toString()));
+    return success();
+  }
+
+  return failure();
+}
+
+//===----------------------------------------------------------------------===//
+// ZLcmOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZLcmOp::fold(FoldAdaptor adaptor) {
+  auto lhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getLhs());
+  auto rhsAttr = dyn_cast_or_null<ZAttr>(adaptor.getRhs());
+
+  if (lhsAttr && rhsAttr) {
+    MPZValue lhs(lhsAttr.getValue());
+    MPZValue rhs(rhsAttr.getValue());
+    MPZValue result;
+    mpz_lcm(result.get(), lhs.get(), rhs.get());
+    return ZAttr::get(getContext(), result.toString());
+  }
+
+  // lcm(x, 0) -> 0
+  if ((lhsAttr && lhsAttr.isZero()) || (rhsAttr && rhsAttr.isZero()))
+    return ZAttr::get(getContext(), "0");
+
+  // lcm(x, 1) -> |x|
+  if (rhsAttr && rhsAttr.isOne())
+    return getLhs();
+  if (lhsAttr && lhsAttr.isOne())
+    return getRhs();
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// Z Modular Arithmetic Operations
+//===----------------------------------------------------------------------===//
+
+//===----------------------------------------------------------------------===//
+// ZPowmOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZPowmOp::fold(FoldAdaptor adaptor) {
+  auto baseAttr = dyn_cast_or_null<ZAttr>(adaptor.getBase());
+  auto expAttr = dyn_cast_or_null<ZAttr>(adaptor.getExp());
+  auto modAttr = dyn_cast_or_null<ZAttr>(adaptor.getModulus());
+
+  if (baseAttr && expAttr && modAttr && !modAttr.isZero()) {
+    MPZValue base(baseAttr.getValue());
+    MPZValue exp(expAttr.getValue());
+    MPZValue mod(modAttr.getValue());
+    MPZValue result;
+    mpz_powm(result.get(), base.get(), exp.get(), mod.get());
+    return ZAttr::get(getContext(), result.toString());
+  }
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZPowmSecOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZPowmSecOp::fold(FoldAdaptor adaptor) {
+  auto baseAttr = dyn_cast_or_null<ZAttr>(adaptor.getBase());
+  auto expAttr = dyn_cast_or_null<ZAttr>(adaptor.getExp());
+  auto modAttr = dyn_cast_or_null<ZAttr>(adaptor.getModulus());
+
+  if (baseAttr && expAttr && modAttr && !modAttr.isZero()) {
+    MPZValue base(baseAttr.getValue());
+    MPZValue exp(expAttr.getValue());
+    MPZValue mod(modAttr.getValue());
+    // mpz_powm_sec requires positive exp and odd modulus
+    // Check modulus is odd
+    if (mpz_sgn(exp.get()) > 0 && mpz_odd_p(mod.get())) {
+      MPZValue result;
+      mpz_powm_sec(result.get(), base.get(), exp.get(), mod.get());
+      return ZAttr::get(getContext(), result.toString());
+    }
+  }
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZInvertOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult ZInvertOp::fold(FoldAdaptor adaptor,
+                              SmallVectorImpl<OpFoldResult> &results) {
+  auto opAttr = dyn_cast_or_null<ZAttr>(adaptor.getOperand());
+  auto modAttr = dyn_cast_or_null<ZAttr>(adaptor.getModulus());
+
+  if (opAttr && modAttr && !modAttr.isZero()) {
+    MPZValue op(opAttr.getValue());
+    MPZValue mod(modAttr.getValue());
+    MPZValue result;
+    int exists = mpz_invert(result.get(), op.get(), mod.get());
+    results.push_back(ZAttr::get(getContext(), result.toString()));
+    results.push_back(BoolAttr::get(getContext(), exists != 0));
+    return success();
+  }
+
+  return failure();
+}
+
+//===----------------------------------------------------------------------===//
+// Z Primality Testing Operations
+//===----------------------------------------------------------------------===//
+
+//===----------------------------------------------------------------------===//
+// ZProbabPrimeOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZProbabPrimeOp::fold(FoldAdaptor adaptor) {
+  auto opAttr = dyn_cast_or_null<ZAttr>(adaptor.getOperand());
+  auto repsAttr = dyn_cast_or_null<IntegerAttr>(adaptor.getReps());
+
+  if (opAttr && repsAttr) {
+    MPZValue val(opAttr.getValue());
+    int reps = repsAttr.getInt();
+    int result = mpz_probab_prime_p(val.get(), reps);
+    return IntegerAttr::get(IntegerType::get(getContext(), 32), result);
+  }
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZNextPrimeOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZNextPrimeOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<ZAttr>(adaptor.getOperand())) {
+    MPZValue val(attr.getValue());
+    MPZValue result;
+    mpz_nextprime(result.get(), val.get());
+    return ZAttr::get(getContext(), result.toString());
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// Z Power and Root Operations
+//===----------------------------------------------------------------------===//
+
+//===----------------------------------------------------------------------===//
+// ZPowOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZPowOp::fold(FoldAdaptor adaptor) {
+  auto baseAttr = dyn_cast_or_null<ZAttr>(adaptor.getBase());
+  auto expAttr = dyn_cast_or_null<IntegerAttr>(adaptor.getExp());
+
+  if (baseAttr && expAttr) {
+    MPZValue base(baseAttr.getValue());
+    uint64_t exp = expAttr.getInt();
+    MPZValue result;
+    mpz_pow_ui(result.get(), base.get(), exp);
+    return ZAttr::get(getContext(), result.toString());
+  }
+
+  // x^0 -> 1
+  if (expAttr && expAttr.getInt() == 0)
+    return ZAttr::get(getContext(), "1");
+
+  // x^1 -> x
+  if (expAttr && expAttr.getInt() == 1)
+    return getBase();
+
+  // 0^n -> 0 (for n > 0)
+  if (baseAttr && baseAttr.isZero())
+    return baseAttr;
+
+  // 1^n -> 1
+  if (baseAttr && baseAttr.isOne())
+    return baseAttr;
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZSqrtOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZSqrtOp::fold(FoldAdaptor adaptor) {
+  if (auto attr = dyn_cast_or_null<ZAttr>(adaptor.getOperand())) {
+    MPZValue val(attr.getValue());
+    // Only fold for non-negative values
+    if (mpz_sgn(val.get()) >= 0) {
+      MPZValue result;
+      mpz_sqrt(result.get(), val.get());
+      return ZAttr::get(getContext(), result.toString());
+    }
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZSqrtRemOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult ZSqrtRemOp::fold(FoldAdaptor adaptor,
+                               SmallVectorImpl<OpFoldResult> &results) {
+  if (auto attr = dyn_cast_or_null<ZAttr>(adaptor.getOperand())) {
+    MPZValue val(attr.getValue());
+    // Only fold for non-negative values
+    if (mpz_sgn(val.get()) >= 0) {
+      MPZValue root, rem;
+      mpz_sqrtrem(root.get(), rem.get(), val.get());
+      results.push_back(ZAttr::get(getContext(), root.toString()));
+      results.push_back(ZAttr::get(getContext(), rem.toString()));
+      return success();
+    }
+  }
+  return failure();
+}
+
+//===----------------------------------------------------------------------===//
+// ZRootOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZRootOp::fold(FoldAdaptor adaptor) {
+  auto opAttr = dyn_cast_or_null<ZAttr>(adaptor.getOperand());
+  auto nAttr = dyn_cast_or_null<IntegerAttr>(adaptor.getN());
+
+  if (opAttr && nAttr) {
+    MPZValue val(opAttr.getValue());
+    uint64_t n = nAttr.getInt();
+    // For even n, operand must be non-negative
+    if (n > 0 && (n % 2 == 1 || mpz_sgn(val.get()) >= 0)) {
+      MPZValue result;
+      mpz_root(result.get(), val.get(), n);
+      return ZAttr::get(getContext(), result.toString());
+    }
+  }
+
+  // x root 1 -> x
+  if (nAttr && nAttr.getInt() == 1)
+    return getOperand();
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// Z Factorial and Combinatorics Operations
+//===----------------------------------------------------------------------===//
+
+//===----------------------------------------------------------------------===//
+// ZFacOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZFacOp::fold(FoldAdaptor adaptor) {
+  if (auto nAttr = dyn_cast_or_null<IntegerAttr>(adaptor.getN())) {
+    int64_t n = nAttr.getInt();
+    if (n >= 0) {
+      MPZValue result;
+      mpz_fac_ui(result.get(), static_cast<uint64_t>(n));
+      return ZAttr::get(getContext(), result.toString());
+    }
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZBinOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZBinOp::fold(FoldAdaptor adaptor) {
+  auto nAttr = dyn_cast_or_null<ZAttr>(adaptor.getN());
+  auto kAttr = dyn_cast_or_null<IntegerAttr>(adaptor.getK());
+
+  if (nAttr && kAttr) {
+    MPZValue n(nAttr.getValue());
+    uint64_t k = kAttr.getInt();
+    MPZValue result;
+    mpz_bin_ui(result.get(), n.get(), k);
+    return ZAttr::get(getContext(), result.toString());
+  }
+
+  // C(n, 0) -> 1
+  if (kAttr && kAttr.getInt() == 0)
+    return ZAttr::get(getContext(), "1");
+
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// ZFibOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ZFibOp::fold(FoldAdaptor adaptor) {
+  if (auto nAttr = dyn_cast_or_null<IntegerAttr>(adaptor.getN())) {
+    int64_t n = nAttr.getInt();
+    if (n >= 0) {
+      MPZValue result;
+      mpz_fib_ui(result.get(), static_cast<uint64_t>(n));
+      return ZAttr::get(getContext(), result.toString());
+    }
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
 // QConstantOp
 //===----------------------------------------------------------------------===//
 

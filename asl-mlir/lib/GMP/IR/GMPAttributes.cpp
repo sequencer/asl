@@ -123,8 +123,9 @@ static FailureOr<std::string> parseSignedInteger(AsmParser &parser) {
     isNegative = true;
   }
 
-  // Try to parse binary literal (0b...) which MLIR lexer doesn't handle natively.
-  // The lexer will tokenize "0b1010" as integer "0" followed by identifier "b1010".
+  // Try to parse binary literal (0b...) which MLIR lexer doesn't handle
+  // natively. The lexer will tokenize "0b1010" as integer "0" followed by
+  // identifier "b1010".
   APInt intVal;
 
   // First, try normal integer parsing (handles decimal and hex 0x...)
@@ -133,7 +134,8 @@ static FailureOr<std::string> parseSignedInteger(AsmParser &parser) {
     if (failed(*intResult)) {
       return failure();
     }
-    // Check if this is the start of a binary literal: we parsed "0" and next is "b..."
+    // Check if this is the start of a binary literal: we parsed "0" and next is
+    // "b..."
     if (intVal == 0) {
       // Try to parse identifier starting with 'b' for binary literal
       llvm::StringRef binStr;
