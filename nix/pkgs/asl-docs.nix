@@ -35,9 +35,14 @@ let
   };
 
   # Build a single document (typix outputs a single PDF file)
-  buildDoc = name: typixLib.buildTypstProject (commonArgs // {
-    typstSource = "${name}.typ";
-  });
+  buildDoc =
+    name:
+    typixLib.buildTypstProject (
+      commonArgs
+      // {
+        typstSource = "${name}.typ";
+      }
+    );
 
   # All documentation files
   docNames = [
@@ -52,17 +57,27 @@ let
   docs = lib.genAttrs docNames buildDoc;
 
   # All docs combined using linkFarm (since each doc is a single PDF file)
-  all = linkFarm "asl-docs" (map (name: {
-    name = "${name}.pdf";
-    path = docs.${name};
-  }) docNames);
+  all = linkFarm "asl-docs" (
+    map (name: {
+      name = "${name}.pdf";
+      path = docs.${name};
+    }) docNames
+  );
 
   # Watch script for development
-  watch = typixLib.watchTypstProject (commonArgs // {
-    typstSource = "GMPRational.typ";  # Default to main doc
-  });
+  watch = typixLib.watchTypstProject (
+    commonArgs
+    // {
+      typstSource = "GMPRational.typ"; # Default to main doc
+    }
+  );
 
 in
 {
-  inherit docs all watch unstable_typstPackages;
+  inherit
+    docs
+    all
+    watch
+    unstable_typstPackages
+    ;
 }
