@@ -280,6 +280,8 @@ ASL arithmetic operations have different semantics depending on operand types:
 - *Bitvector operations* (`bits.add`, `bits.sub`, `bits.mul`): Fixed-width unsigned modular arithmetic. Results wrap around: `(a op b) mod 2^N` where N is the bitvector width.
 - *Real operations* (`real.add`, `real.sub`, `real.mul`): Exact rational arithmetic with no precision limits.
 
+*Mixed Integer/Real Operations:* ASL supports multiplication between integers and reals. When operands have mixed types, integer operands are promoted to rational before the operation. The JSON importer performs this dispatch: if either operand is `!asl.real`, the `real.*` operation is used and the result is `!asl.real`.
+
 ==== Other Binary Operations
 
 #table(

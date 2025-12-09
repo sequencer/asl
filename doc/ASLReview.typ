@@ -81,11 +81,13 @@ The following issues relate to semantic interpretation in the MLIR dialect, not 
 
 *Recommendation:* Document that collection constraints are frontend-verified.
 
-==== Mixed Integer/Real Operations
+==== Mixed Integer/Real Operations (RESOLVED)
 
 *Problem:* ASL supports multiplication between integers and rationals. Type coercion semantics are undocumented.
 
-*Recommendation:* Document that integer operands are promoted to rational for mixed-type multiplication.
+*Resolution:* Documented in ASLRational.typ section "Type-Specific Arithmetic Operations":
+- Integer operands are promoted to rational for mixed-type operations
+- JSON importer dispatches to `real.*` operations when either operand is `!asl.real`
 
 == Summary
 
@@ -104,7 +106,7 @@ The following issues relate to semantic interpretation in the MLIR dialect, not 
   [Real representation], [Low], [Dialect], [RESOLVED],
   [Valueless exceptions], [Low], [Dialect], [RESOLVED],
   [Collection constraints], [Low], [Frontend], [Documented],
-  [Mixed int/real], [Low], [Dialect], [Open],
+  [Mixed int/real], [Low], [Dialect], [RESOLVED],
 )
 
 == Conclusion
