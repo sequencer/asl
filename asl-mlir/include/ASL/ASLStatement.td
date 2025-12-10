@@ -39,7 +39,7 @@ def ASL_StmtPassOp : ASL_StmtOp<"stmt.pass"> {
   let assemblyFormat = "attr-dict";
 }
 
-def ASL_StmtSeqOp : ASL_StmtOp<"stmt.seq"> {
+def ASL_StmtSeqOp : ASL_StmtOp<"stmt.seq", [NoTerminator]> {
   let summary = "Sequential composition statement";
   let description = [{
     Sequential composition of two statements.
@@ -103,7 +103,7 @@ def ASL_StmtReturnOp : ASL_StmtOp<"stmt.return", [Terminator]> {
   let assemblyFormat = "($value^)? attr-dict (`:` type($value)^)?";
 }
 
-def ASL_StmtCondOp : ASL_StmtOp<"stmt.cond"> {
+def ASL_StmtCondOp : ASL_StmtOp<"stmt.cond", [NoTerminator]> {
   let summary = "Conditional statement";
   let description = [{
     Conditional statement (if-then-else).
@@ -127,7 +127,7 @@ def ASL_StmtAssertOp : ASL_StmtOp<"stmt.assert"> {
   let assemblyFormat = "$condition attr-dict `:` type($condition)";
 }
 
-def ASL_StmtForOp : ASL_StmtOp<"stmt.for"> {
+def ASL_StmtForOp : ASL_StmtOp<"stmt.for", [NoTerminator]> {
   let summary = "For loop statement";
   let description = [{
     For loop statement.
@@ -149,7 +149,7 @@ def ASL_StmtForOp : ASL_StmtOp<"stmt.for"> {
       "attr-dict `:` functional-type(operands, results)";
 }
 
-def ASL_StmtWhileOp : ASL_StmtOp<"stmt.while"> {
+def ASL_StmtWhileOp : ASL_StmtOp<"stmt.while", [NoTerminator]> {
   let summary = "While loop statement";
   let description = [{
     While loop with condition input.
@@ -168,7 +168,7 @@ def ASL_StmtWhileOp : ASL_StmtOp<"stmt.while"> {
                        "functional-type(operands, results)";
 }
 
-def ASL_StmtRepeatOp : ASL_StmtOp<"stmt.repeat"> {
+def ASL_StmtRepeatOp : ASL_StmtOp<"stmt.repeat", [NoTerminator]> {
   let summary = "Repeat-until loop statement";
   let description = [{
     Repeat-until loop.
@@ -200,7 +200,7 @@ def ASL_StmtThrowOp : ASL_StmtOp<"stmt.throw", [Terminator]> {
       "($value^)? (`type` $type^)? attr-dict (`:` type($value)^)?";
 }
 
-def ASL_StmtTryOp : ASL_StmtOp<"stmt.try"> {
+def ASL_StmtTryOp : ASL_StmtOp<"stmt.try", [NoTerminator]> {
   let summary = "Try-catch statement";
   let description = [{
     Try-catch statement.

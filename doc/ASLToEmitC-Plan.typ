@@ -111,11 +111,16 @@ Note: Testing requires Phase 5 (Function Declarations) to be completed.
 - `StmtUnreachableOp` -> `__builtin_unreachable()`
 - `StmtWhileOp` -> `scf.while` (without limit support)
 - `StmtRepeatOp` -> `scf.while` with do-while semantics (without limit support)
-- `StmtForOp` -> stub (GMP integer bounds require complex lowering)
+- `StmtForOp` -> `scf.while` with GMP comparisons:
+  - Creates loop index variable (mpz_t)
+  - Initializes with start value (mpz_init_set)
+  - Compares with end value (mpz_cmp)
+  - Increments/decrements based on direction (mpz_add_ui/mpz_sub_ui)
+  - Cleans up index (mpz_clear)
 
 ==== Not Yet Implemented
-- For loops with GMP bounds (requires conversion to while loop with GMP comparisons)
 - Loop limit handling (LimitExceeded exception)
+- VarOp resolution for loop index variable (requires name resolution pass)
 
 === Phase 5: Function Declarations (IMPLEMENTED)
 
@@ -327,11 +332,12 @@ Current implementation: 4919 lines in `ASLToEmitC.cpp`
 - Phase 13: Miscellaneous
 
 === Remaining Work
-- Phase 4: For loops with GMP bounds, loop limit handling
+- Phase 4: Loop limit handling, VarOp resolution for loop index
 - Phase 5: Context pointer for globals, procedure return
 - Phase 6: Full array/enum array initialization with loops
 - Phase 8: Full bit-packing support for LExprSetFieldsOp, LExprSetCollectionFieldsOp
 - Phase 12: Full setjmp/longjmp exception handling (runtime support)
+- VarOp/LExprVarOp: Name resolution pass to map names to SSA values
 
 Consider splitting into multiple files:
 - `ASLToEmitC.cpp` - pass infrastructure, type converter

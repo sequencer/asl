@@ -1570,20 +1570,136 @@ struct StmtUnreachableOpLowering
 };
 
 // For loop: for index = start to/downto end [limit L] do body
-// Loops with GMP bounds are complex - for now, emit a warning and fail
-// A full implementation would use while loops with GMP comparisons
+// Lowered to: create index var, init with start, while (cmp) { body; inc/dec }
 struct StmtForOpLowering : public OpConversionPattern<asl::StmtForOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(asl::StmtForOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // For loops with GMP integer bounds require complex lowering
-    // For now, fail with a clear message - this needs a dedicated lowering
-    // that converts GMP integers to native types for loop control
-    return rewriter.notifyMatchFailure(
-        op, "for loops with GMP integer bounds not yet supported - "
-            "requires conversion to while loop with GMP comparisons");
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Check if limit is specified - not yet supported
+    if (adaptor.getLimit()) {
+      return rewriter.notifyMatchFailure(
+          op, "for loops with limit not yet supported");
+    }
+
+    // Get direction: up (0) means i <= end, down (1) means i >= end
+    bool isUp = (op.getDirection() == asl::ForDirection::up);
+
+    // Get GMP type for loop index
+    auto mpzType = emitc::OpaqueType::get(context, "mpz_t");
+    auto mpzLvalueType = emitc::LValueType::get(mpzType);
+    auto boolType = rewriter.getI1Type();
+
+    // Create loop index variable
+    auto initAttr = emitc::OpaqueAttr::get(context, "");
+    auto indexVar =
+        rewriter.create<emitc::VariableOp>(loc, mpzLvalueType, initAttr);
+
+    // Load the variable for GMP operations
+    Value indexLoaded =
+        rewriter.create<emitc::LoadOp>(loc, mpzType, indexVar.getResult());
+
+    // Initialize with start value: mpz_init_set(index, start)
+    Value startLoaded = loadGmpValue(rewriter, loc, adaptor.getStart());
+    rewriter.create<emitc::CallOpaqueOp>(loc, TypeRange{}, "mpz_init_set",
+                                          ValueRange{indexLoaded, startLoaded},
+                                          nullptr, nullptr);
+
+    // Load end value for comparison
+    Value endLoaded = loadGmpValue(rewriter, loc, adaptor.getEnd());
+
+    // Create scf.while operation
+    auto whileOp = rewriter.create<scf::WhileOp>(loc, TypeRange{}, ValueRange{});
+
+    // Set up the "before" region (condition check)
+    Block *beforeBlock = rewriter.createBlock(&whileOp.getBefore());
+    rewriter.setInsertionPointToEnd(beforeBlock);
+
+    // Reload index for comparison (in case it was modified)
+    Value indexForCmp =
+        rewriter.create<emitc::LoadOp>(loc, mpzType, indexVar.getResult());
+
+    // Compare: mpz_cmp(index, end)
+    auto cmpResult = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{rewriter.getI32Type()}, "mpz_cmp",
+        ValueRange{indexForCmp, endLoaded}, nullptr, nullptr);
+
+    // Create condition based on direction
+    // For up: cmp <= 0 (index <= end)
+    // For down: cmp >= 0 (index >= end)
+    Value zero = rewriter.create<emitc::ConstantOp>(
+        loc, rewriter.getI32Type(),
+        rewriter.getIntegerAttr(rewriter.getI32Type(), 0));
+
+    Value condition;
+    if (isUp) {
+      // index <= end means mpz_cmp(index, end) <= 0
+      condition = rewriter.create<emitc::CmpOp>(
+          loc, boolType, emitc::CmpPredicate::le,
+          cmpResult.getResult(0), zero);
+    } else {
+      // index >= end means mpz_cmp(index, end) >= 0
+      condition = rewriter.create<emitc::CmpOp>(
+          loc, boolType, emitc::CmpPredicate::ge,
+          cmpResult.getResult(0), zero);
+    }
+
+    rewriter.create<scf::ConditionOp>(loc, condition, ValueRange{});
+
+    // Set up the "after" region (body + increment)
+    Block *afterBlock = rewriter.createBlock(&whileOp.getAfter());
+
+    // Move the body operations
+    Region &bodyRegion = op.getBody();
+    if (!bodyRegion.empty()) {
+      Block &bodyBlock = bodyRegion.front();
+      rewriter.inlineBlockBefore(&bodyBlock, afterBlock, afterBlock->begin());
+    }
+
+    // Add increment/decrement at end of after block
+    rewriter.setInsertionPointToEnd(afterBlock);
+
+    // Reload index for increment
+    Value indexForInc =
+        rewriter.create<emitc::LoadOp>(loc, mpzType, indexVar.getResult());
+
+    if (isUp) {
+      // mpz_add_ui(index, index, 1)
+      rewriter.create<emitc::CallOpaqueOp>(
+          loc, TypeRange{}, "mpz_add_ui",
+          ValueRange{indexForInc, indexForInc,
+                     rewriter.create<emitc::ConstantOp>(
+                         loc, rewriter.getI64Type(),
+                         rewriter.getIntegerAttr(rewriter.getI64Type(), 1))},
+          nullptr, nullptr);
+    } else {
+      // mpz_sub_ui(index, index, 1)
+      rewriter.create<emitc::CallOpaqueOp>(
+          loc, TypeRange{}, "mpz_sub_ui",
+          ValueRange{indexForInc, indexForInc,
+                     rewriter.create<emitc::ConstantOp>(
+                         loc, rewriter.getI64Type(),
+                         rewriter.getIntegerAttr(rewriter.getI64Type(), 1))},
+          nullptr, nullptr);
+    }
+
+    // Add yield at end of after block
+    rewriter.create<scf::YieldOp>(loc);
+
+    // Cleanup: mpz_clear(index)
+    rewriter.setInsertionPointAfter(whileOp);
+    Value indexForClear =
+        rewriter.create<emitc::LoadOp>(loc, mpzType, indexVar.getResult());
+    rewriter.create<emitc::CallOpaqueOp>(loc, TypeRange{}, "mpz_clear",
+                                          ValueRange{indexForClear}, nullptr,
+                                          nullptr);
+
+    rewriter.eraseOp(op);
+    return success();
   }
 };
 
