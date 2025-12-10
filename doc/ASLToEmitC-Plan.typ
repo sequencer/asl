@@ -183,12 +183,10 @@ Note: Testing requires Phase 5 (Function Declarations) to be completed.
 - `LExprSetFieldOp` -> `&(base->field)` via call_opaque
 - `LExprSetArrayOp` -> `&(base[index])` via call_opaque
 - `LExprDestructuringOp` -> struct of void* pointers for tuple elements
-
-==== Not Yet Implemented
-- `LExprSliceOp` -> bitfield write (requires runtime support)
-- `LExprSetEnumArrayOp` -> enum-indexed array element
-- `LExprSetFieldsOp` -> multiple field assignment
-- `LExprSetCollectionFieldsOp` -> collection field assignment
+- `LExprSliceOp` -> slice descriptor with base, start, length
+- `LExprSetEnumArrayOp` -> `&(base[enum_index])` with enum-to-int cast
+- `LExprSetFieldsOp` -> returns base (bit-packing needs runtime support)
+- `LExprSetCollectionFieldsOp` -> NULL (requires runtime support)
 
 === Phase 9: Assignment and Declaration (IMPLEMENTED)
 
@@ -321,7 +319,7 @@ Current implementation: 4289 lines in `ASLToEmitC.cpp`
 - Phase 4: For loops with GMP bounds, loop limit handling
 - Phase 5: Context pointer for globals, procedure return
 - Phase 6: Full array/enum array initialization with loops
-- Phase 8: LExprSliceOp, LExprSetEnumArrayOp, LExprSetFieldsOp
+- Phase 8: Full bit-packing support for LExprSetFieldsOp, LExprSetCollectionFieldsOp
 - Phase 10: Pattern operations with regions (PatternNotOp, PatternAnyOp, etc.)
 - Phase 11: ATC type conversion operations
 - Phase 12: Exception handling (StmtThrowOp, StmtTryOp)

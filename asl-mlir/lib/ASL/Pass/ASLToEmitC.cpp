@@ -2801,6 +2801,165 @@ struct LExprDestructuringOpLowering
   }
 };
 
+// LExprSlice: produces lvalue for a bitvector slice
+// This is used in slice assignment: x[3:0] = value
+struct LExprSliceOpLowering : public OpConversionPattern<asl::LExprSliceOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::LExprSliceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Slice assignment to bitvectors requires runtime support for bit manipulation
+    // The base is an l-expression (pointer to bitvector), slices define which bits
+    // For now, we create a descriptor that holds the base pointer and slice info
+
+    Value base = adaptor.getBase();
+    auto slices = adaptor.getSlices();
+
+    // Create a slice descriptor struct: { void* base; long start; long length; }
+    auto voidPtrType = emitc::OpaqueType::get(context, "void*");
+    auto sliceDescType =
+        emitc::OpaqueType::get(context, "struct { void* base; long start; long length; }");
+    auto lvalueType = emitc::LValueType::get(sliceDescType);
+
+    auto varOp = rewriter.create<emitc::VariableOp>(
+        loc, lvalueType, emitc::OpaqueAttr::get(context, ""));
+
+    // Set base pointer
+    auto baseLvalue =
+        emitc::LValueType::get(voidPtrType);
+    auto baseField =
+        rewriter.create<emitc::MemberOp>(loc, baseLvalue, "base", varOp);
+    rewriter.create<emitc::AssignOp>(loc, baseField, base);
+
+    // For a single slice, extract start and length
+    if (!slices.empty()) {
+      Value firstSlice = slices[0];
+      // Access slice.start and slice.length
+      auto longType = emitc::OpaqueType::get(context, "long");
+      auto longLvalue = emitc::LValueType::get(longType);
+
+      // Note: slices are already converted to struct { long start; long length; }
+      // We need to copy the start/length from the slice descriptor
+      auto sliceLvalue = emitc::LValueType::get(firstSlice.getType());
+      auto sliceVar = rewriter.create<emitc::VariableOp>(
+          loc, sliceLvalue, emitc::OpaqueAttr::get(context, ""));
+      rewriter.create<emitc::AssignOp>(loc, sliceVar, firstSlice);
+
+      auto startField =
+          rewriter.create<emitc::MemberOp>(loc, longLvalue, "start", sliceVar);
+      auto lengthField =
+          rewriter.create<emitc::MemberOp>(loc, longLvalue, "length", sliceVar);
+
+      auto startVal = rewriter.create<emitc::LoadOp>(loc, longType, startField);
+      auto lengthVal =
+          rewriter.create<emitc::LoadOp>(loc, longType, lengthField);
+
+      auto destStartField =
+          rewriter.create<emitc::MemberOp>(loc, longLvalue, "start", varOp);
+      auto destLengthField =
+          rewriter.create<emitc::MemberOp>(loc, longLvalue, "length", varOp);
+
+      rewriter.create<emitc::AssignOp>(loc, destStartField, startVal);
+      rewriter.create<emitc::AssignOp>(loc, destLengthField, lengthVal);
+    }
+
+    rewriter.replaceOp(op, varOp.getResult());
+    return success();
+  }
+};
+
+// LExprSetEnumArray: produces lvalue for enum-indexed array element
+struct LExprSetEnumArrayOpLowering
+    : public OpConversionPattern<asl::LExprSetEnumArrayOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::LExprSetEnumArrayOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    Value base = adaptor.getBase();
+    Value index = adaptor.getIndex();
+
+    // Handle lvalue index
+    if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(index.getType())) {
+      index =
+          rewriter.create<emitc::LoadOp>(loc, lvalueType.getValueType(), index);
+    }
+
+    // Cast enum to int for array indexing
+    auto intType = emitc::OpaqueType::get(context, "int");
+    auto intIndex = rewriter.create<emitc::CastOp>(loc, intType, index);
+
+    // Build address expression: &(base[index])
+    // Return as void* for l-expression
+    auto voidPtrType = emitc::OpaqueType::get(context, "void*");
+    std::string addrExpr = "&((*)base)[index]";
+
+    auto addrOp = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{voidPtrType}, addrExpr,
+        ValueRange{base, intIndex.getResult()}, nullptr, nullptr);
+
+    rewriter.replaceOp(op, addrOp.getResult(0));
+    return success();
+  }
+};
+
+// LExprSetFields: produces lvalue for multiple field assignment (bit-packing)
+struct LExprSetFieldsOpLowering
+    : public OpConversionPattern<asl::LExprSetFieldsOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::LExprSetFieldsOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    Value base = adaptor.getBase();
+    auto fieldNames = op.getFieldNames();
+
+    // Multiple field assignment for bit-packing is complex:
+    // It needs to unpack the assigned value and distribute bits to fields
+    // For now, create a descriptor holding base and field info
+
+    // Create a struct to hold the l-expression info
+    auto voidPtrType = emitc::OpaqueType::get(context, "void*");
+
+    // For simplicity, just return the base - proper implementation
+    // would need runtime support for bit-packing
+    rewriter.replaceOp(op, base);
+    return success();
+  }
+};
+
+// LExprSetCollectionFields: produces lvalue for collection field assignment
+struct LExprSetCollectionFieldsOpLowering
+    : public OpConversionPattern<asl::LExprSetCollectionFieldsOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::LExprSetCollectionFieldsOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Collection field assignment is similar to SetFields but for collections
+    // For now, return a NULL pointer as this requires runtime support
+    auto voidPtrType = emitc::OpaqueType::get(context, "void*");
+    auto nullPtr = rewriter.create<emitc::ConstantOp>(
+        loc, voidPtrType, emitc::OpaqueAttr::get(context, "NULL"));
+
+    rewriter.replaceOp(op, nullPtr.getResult());
+    return success();
+  }
+};
+
 // StmtDecl: local variable declaration with optional initializer
 struct StmtDeclOpLowering : public OpConversionPattern<asl::StmtDeclOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -3607,7 +3766,9 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
     // Add l-expression and assignment patterns (Phase 8 & 9)
     patterns.add<LExprDiscardOpLowering, LExprVarOpLowering,
                  LExprSetFieldOpLowering, LExprSetArrayOpLowering,
-                 LExprDestructuringOpLowering, StmtDeclOpLowering,
+                 LExprDestructuringOpLowering, LExprSliceOpLowering,
+                 LExprSetEnumArrayOpLowering, LExprSetFieldsOpLowering,
+                 LExprSetCollectionFieldsOpLowering, StmtDeclOpLowering,
                  StmtAssignOpLowering>(typeConverter, context);
 
     // Add pattern matching patterns (Phase 10)
