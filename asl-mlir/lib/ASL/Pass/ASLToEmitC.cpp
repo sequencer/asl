@@ -122,6 +122,11 @@ public:
       return convertTupleType(type);
     });
 
+    // Convert ASL slice type to C struct { long start; long length; }
+    addConversion([this](asl::SliceType type) -> std::optional<Type> {
+      return convertSliceType(type);
+    });
+
     // Add source materialization for converting back from converted types
     addSourceMaterialization([](OpBuilder &builder, Type resultType,
                                 ValueRange inputs, Location loc) -> Value {
@@ -354,6 +359,24 @@ private:
     structType += " }";
 
     return emitc::OpaqueType::get(context, structType);
+  }
+
+  // Convert ASL slice type to C struct
+  Type convertSliceType(asl::SliceType type) {
+    // ASL slice descriptors are used to describe index ranges for bitvector
+    // and array slicing operations. We represent them as a simple struct
+    // with start position and length fields.
+    //
+    // The struct contains:
+    // - start: the starting bit position (long to handle GMP values)
+    // - length: the number of bits to extract (long)
+    //
+    // This representation is sufficient for all slice variants:
+    // - SliceSingle(i): start=i, length=1
+    // - SliceRange(j, i): start=j, length=i-j (caller computes)
+    // - SliceLength(i, n): start=i, length=n
+    // - SliceStar(i, n): start=i*n, length=n (caller computes)
+    return emitc::OpaqueType::get(context, "struct { long start; long length; }");
   }
 };
 
@@ -2125,6 +2148,275 @@ struct GetArrayOpLowering : public OpConversionPattern<asl::GetArrayOp> {
 };
 
 //===----------------------------------------------------------------------===//
+// Phase 7: Slicing Operations
+//===----------------------------------------------------------------------===//
+
+// Helper to convert GMP integer to native long
+static Value gmpToLong(ConversionPatternRewriter &rewriter, Location loc,
+                       Value gmpValue) {
+  MLIRContext *context = rewriter.getContext();
+
+  // Load if lvalue
+  if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(gmpValue.getType())) {
+    auto mpzType = emitc::OpaqueType::get(context, "mpz_t");
+    gmpValue = rewriter.create<emitc::LoadOp>(loc, mpzType, gmpValue);
+  }
+
+  // Convert to long
+  auto longType = emitc::OpaqueType::get(context, "long");
+  auto result = rewriter.create<emitc::CallOpaqueOp>(
+      loc, TypeRange{longType}, "mpz_get_si", ValueRange{gmpValue}, nullptr,
+      nullptr);
+  return result.getResult(0);
+}
+
+// Helper to create a slice descriptor struct
+static Value createSliceDescriptor(ConversionPatternRewriter &rewriter,
+                                   Location loc, Value start, Value length) {
+  MLIRContext *context = rewriter.getContext();
+  auto sliceType =
+      emitc::OpaqueType::get(context, "struct { long start; long length; }");
+  auto lvalueType = emitc::LValueType::get(sliceType);
+
+  // Create variable for the slice descriptor
+  auto varOp = rewriter.create<emitc::VariableOp>(
+      loc, lvalueType, emitc::OpaqueAttr::get(context, ""));
+
+  // Set start field
+  auto longType = emitc::OpaqueType::get(context, "long");
+  auto startLvalue = emitc::LValueType::get(longType);
+  auto startField =
+      rewriter.create<emitc::MemberOp>(loc, startLvalue, "start", varOp);
+  rewriter.create<emitc::AssignOp>(loc, startField, start);
+
+  // Set length field
+  auto lengthField =
+      rewriter.create<emitc::MemberOp>(loc, startLvalue, "length", varOp);
+  rewriter.create<emitc::AssignOp>(loc, lengthField, length);
+
+  return varOp.getResult();
+}
+
+// SliceSingle: creates slice of length 1 at position i
+struct SliceSingleOpLowering : public OpConversionPattern<asl::SliceSingleOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::SliceSingleOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Convert index from GMP to long
+    Value start = gmpToLong(rewriter, loc, adaptor.getIndex());
+
+    // Length is 1
+    auto longType = emitc::OpaqueType::get(context, "long");
+    auto lengthOne = rewriter.create<emitc::ConstantOp>(
+        loc, longType, emitc::OpaqueAttr::get(context, "1"));
+
+    // Create slice descriptor
+    Value sliceDesc = createSliceDescriptor(rewriter, loc, start, lengthOne);
+
+    rewriter.replaceOp(op, sliceDesc);
+    return success();
+  }
+};
+
+// SliceRange: creates slice from position j to i-1 (inclusive)
+struct SliceRangeOpLowering : public OpConversionPattern<asl::SliceRangeOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::SliceRangeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Convert start (j) and end (i) from GMP to long
+    Value startVal = gmpToLong(rewriter, loc, adaptor.getStart());
+    Value endVal = gmpToLong(rewriter, loc, adaptor.getEnd());
+
+    // Length = end - start (i - j gives length from j to i-1)
+    auto longType = emitc::OpaqueType::get(context, "long");
+    auto lengthVal = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{longType}, "-", ValueRange{endVal, startVal}, nullptr,
+        nullptr);
+
+    // Create slice descriptor with start=j, length=i-j
+    Value sliceDesc =
+        createSliceDescriptor(rewriter, loc, startVal, lengthVal.getResult(0));
+
+    rewriter.replaceOp(op, sliceDesc);
+    return success();
+  }
+};
+
+// SliceLength: creates slice of length n starting at position i
+struct SliceLengthOpLowering : public OpConversionPattern<asl::SliceLengthOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::SliceLengthOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    // Convert start and length from GMP to long
+    Value startVal = gmpToLong(rewriter, loc, adaptor.getStart());
+    Value lengthVal = gmpToLong(rewriter, loc, adaptor.getLength());
+
+    // Create slice descriptor
+    Value sliceDesc = createSliceDescriptor(rewriter, loc, startVal, lengthVal);
+
+    rewriter.replaceOp(op, sliceDesc);
+    return success();
+  }
+};
+
+// SliceStar: creates slice at position factor*length with given length
+struct SliceStarOpLowering : public OpConversionPattern<asl::SliceStarOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::SliceStarOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Convert factor and length from GMP to long
+    Value factorVal = gmpToLong(rewriter, loc, adaptor.getFactor());
+    Value lengthVal = gmpToLong(rewriter, loc, adaptor.getLength());
+
+    // Compute start = factor * length
+    auto longType = emitc::OpaqueType::get(context, "long");
+    auto startVal = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{longType}, "*", ValueRange{factorVal, lengthVal},
+        nullptr, nullptr);
+
+    // Create slice descriptor
+    Value sliceDesc =
+        createSliceDescriptor(rewriter, loc, startVal.getResult(0), lengthVal);
+
+    rewriter.replaceOp(op, sliceDesc);
+    return success();
+  }
+};
+
+// SliceOp: applies slices to extract bits from a bitvector
+struct SliceOpLowering : public OpConversionPattern<asl::SliceOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::SliceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Get converted result type
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    // Get the base bitvector value
+    Value base = adaptor.getBase();
+
+    // Handle lvalue base
+    if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(base.getType())) {
+      base = rewriter.create<emitc::LoadOp>(loc, lvalueType.getValueType(),
+                                            base);
+    }
+
+    // Get the slices
+    auto slices = adaptor.getSlices();
+
+    if (slices.empty()) {
+      // No slices - just return the base value
+      rewriter.replaceOp(op, base);
+      return success();
+    }
+
+    // For a single slice, extract bits: (base >> start) & ((1ULL << length) - 1)
+    // For multiple slices, concatenate them
+    auto longType = emitc::OpaqueType::get(context, "long");
+    auto sliceType =
+        emitc::OpaqueType::get(context, "struct { long start; long length; }");
+
+    Value result;
+
+    for (size_t i = 0; i < slices.size(); ++i) {
+      Value slice = slices[i];
+
+      // Load slice if lvalue
+      if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(slice.getType())) {
+        slice = rewriter.create<emitc::LoadOp>(loc, sliceType, slice);
+      }
+
+      // Extract start and length from slice descriptor
+      auto sliceLvalue = emitc::LValueType::get(sliceType);
+
+      // We need to create a variable to hold the slice for member access
+      auto tempVar = rewriter.create<emitc::VariableOp>(
+          loc, sliceLvalue, emitc::OpaqueAttr::get(context, ""));
+      rewriter.create<emitc::AssignOp>(loc, tempVar, slice);
+
+      auto startLvalue = emitc::LValueType::get(longType);
+      auto startField =
+          rewriter.create<emitc::MemberOp>(loc, startLvalue, "start", tempVar);
+      auto start =
+          rewriter.create<emitc::LoadOp>(loc, longType, startField);
+
+      auto lengthField =
+          rewriter.create<emitc::MemberOp>(loc, startLvalue, "length", tempVar);
+      auto length =
+          rewriter.create<emitc::LoadOp>(loc, longType, lengthField);
+
+      // Extract bits: (base >> start) & ((1ULL << length) - 1)
+      // First: shifted = base >> start
+      auto shifted = rewriter.create<emitc::CallOpaqueOp>(
+          loc, TypeRange{resultType}, ">>", ValueRange{base, start}, nullptr,
+          nullptr);
+
+      // Create mask: (1ULL << length) - 1
+      auto oneULL = rewriter.create<emitc::ConstantOp>(
+          loc, resultType, emitc::OpaqueAttr::get(context, "1ULL"));
+      auto maskShifted = rewriter.create<emitc::CallOpaqueOp>(
+          loc, TypeRange{resultType}, "<<", ValueRange{oneULL, length}, nullptr,
+          nullptr);
+      auto oneForMask = rewriter.create<emitc::ConstantOp>(
+          loc, resultType, emitc::OpaqueAttr::get(context, "1"));
+      auto mask = rewriter.create<emitc::CallOpaqueOp>(
+          loc, TypeRange{resultType}, "-",
+          ValueRange{maskShifted.getResult(0), oneForMask}, nullptr, nullptr);
+
+      // Apply mask: shifted & mask
+      auto extracted = rewriter.create<emitc::CallOpaqueOp>(
+          loc, TypeRange{resultType}, "&",
+          ValueRange{shifted.getResult(0), mask.getResult(0)}, nullptr,
+          nullptr);
+
+      if (i == 0) {
+        result = extracted.getResult(0);
+      } else {
+        // For multiple slices, shift and OR to concatenate
+        // result = (result << length) | extracted
+        auto shiftedResult = rewriter.create<emitc::CallOpaqueOp>(
+            loc, TypeRange{resultType}, "<<", ValueRange{result, length},
+            nullptr, nullptr);
+        result = rewriter.create<emitc::CallOpaqueOp>(
+                     loc, TypeRange{resultType}, "|",
+                     ValueRange{shiftedResult.getResult(0),
+                                extracted.getResult(0)},
+                     nullptr, nullptr)
+                     .getResult(0);
+      }
+    }
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Pass Implementation
 //===----------------------------------------------------------------------===//
 
@@ -2243,6 +2535,11 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
 
     // Add type conversion patterns (ATC)
     patterns.add<AtcOpLowering>(typeConverter, context);
+
+    // Add slicing patterns (Phase 7)
+    patterns.add<SliceSingleOpLowering, SliceRangeOpLowering,
+                 SliceLengthOpLowering, SliceStarOpLowering, SliceOpLowering>(
+        typeConverter, context);
 
     // Collect type declarations before conversion for typedef generation
     SmallVector<asl::TypeDeclOp> typeDecls;

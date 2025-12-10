@@ -137,32 +137,36 @@ Note: Testing requires Phase 5 (Function Declarations) to be completed.
 - Context pointer for global variable access (requires globals analysis)
 - Procedure return handling (void functions)
 
-=== Phase 6: Data Structures
-Priority: Medium
+=== Phase 6: Data Structures (PARTIALLY IMPLEMENTED)
 
-==== Tuple Operations
-- `GetItemOp` -> `.itemN` field access
-- `TupleOp` -> struct initialization (already done)
+==== Implemented Patterns
+- `TupleOp` -> `emitc.variable` + `emitc.member` for field initialization
+  - Uses `emitc.member` to access struct fields
+  - Uses `emitc.assign` for simple types, GMP init/set for GMP types
+- `GetItemOp` -> `emitc.member` + `emitc.load` for tuple field access
+- `RecordOp` -> `emitc.variable` + `emitc.member` for field initialization
+- `GetFieldOp` -> `emitc.member` + `emitc.load` for record field access
+- `GetArrayOp` -> `emitc.subscript` with `mpz_get_si` for index conversion
 
-==== Array Operations
+==== Not Yet Implemented
 - `ArrayOp` -> heap allocation or stack array
-- `GetArrayOp` -> indexed access
 - `GetEnumArrayOp` -> enum-indexed access
 - `EnumArrayOp` -> enum-keyed array construction
-
-==== Record Operations
-- `RecordOp` -> struct initialization
-- `GetFieldOp` -> `.fieldName` access
 - `GetFieldsOp` -> multiple field access for bit-packing
 
-=== Phase 7: Slicing Operations
-Priority: Medium
+=== Phase 7: Slicing Operations (IMPLEMENTED)
 
-- `SliceSingleOp` -> single bit extraction
-- `SliceRangeOp` -> bit range extraction
-- `SliceLengthOp` -> length-based extraction
-- `SliceStarOp` -> factor-based extraction
-- `SliceOp` (expression) -> apply slices to bitvector
+==== Slice Type Representation
+- `!asl.slice` -> `struct { long start; long length; }` (descriptor)
+
+==== Implemented Patterns
+- `SliceSingleOp` -> creates slice descriptor with start=i, length=1
+- `SliceRangeOp` -> creates slice descriptor with start=j, length=i-j
+- `SliceLengthOp` -> creates slice descriptor with start=i, length=n
+- `SliceStarOp` -> creates slice descriptor with start=factor*length, length=n
+- `SliceOp` -> applies slices to bitvector:
+  - Single slice: `(base >> start) & ((1ULL << length) - 1)`
+  - Multiple slices: concatenated via shift and OR
 
 === Phase 8: L-Expressions (Assignment Targets)
 Priority: Medium (needed for assignment)
