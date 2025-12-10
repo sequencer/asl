@@ -309,7 +309,7 @@ For bitvectors > 64 bits:
 
 == Implementation Status
 
-Current implementation: 4289 lines in `ASLToEmitC.cpp`
+Current implementation: 4891 lines in `ASLToEmitC.cpp`
 
 === Completed Phases
 - Phase 1: Literals and Simple Expressions
