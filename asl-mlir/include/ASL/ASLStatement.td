@@ -92,7 +92,7 @@ def ASL_StmtCallOp : ASL_StmtOp<"stmt.call"> {
                        "attr-dict `:` functional-type(operands, results)";
 }
 
-def ASL_StmtReturnOp : ASL_StmtOp<"stmt.return"> {
+def ASL_StmtReturnOp : ASL_StmtOp<"stmt.return", [Terminator]> {
   let summary = "Return statement";
   let description = [{
     Return statement with optional expression input.
@@ -187,7 +187,7 @@ def ASL_StmtRepeatOp : ASL_StmtOp<"stmt.repeat"> {
                        "`:` functional-type(operands, results)";
 }
 
-def ASL_StmtThrowOp : ASL_StmtOp<"stmt.throw"> {
+def ASL_StmtThrowOp : ASL_StmtOp<"stmt.throw", [Terminator]> {
   let summary = "Exception throwing statement";
   let description = [{
     Exception throwing statement.
@@ -228,7 +228,7 @@ def ASL_StmtPrintOp : ASL_StmtOp<"stmt.print"> {
                        "functional-type(operands, results)";
 }
 
-def ASL_StmtUnreachableOp : ASL_StmtOp<"stmt.unreachable"> {
+def ASL_StmtUnreachableOp : ASL_StmtOp<"stmt.unreachable", [Terminator]> {
   let summary = "Unreachable statement";
   let description = [{
     Marks unreachable code.

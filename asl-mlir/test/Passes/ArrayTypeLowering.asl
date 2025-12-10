@@ -1,6 +1,7 @@
 // RUN: asl-json-backend --no-std %s > %t.json
-// RUN: asl-opt --canonicalize --run-asl-to-emitc --emitc --json-input %t.json | FileCheck %s
+// RUN: asl-opt --json-canonicalize --run-asl-to-emitc --emitc --json-input %t.json | FileCheck %s
 
+// CHECK: uint8_t bytes[16]
 var bytes: array [[16]] of bits(8);
 
 // type Coord of enumeration {X, Y, Z};
