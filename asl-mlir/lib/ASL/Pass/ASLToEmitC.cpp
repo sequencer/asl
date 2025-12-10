@@ -1885,9 +1885,11 @@ struct TupleOpLowering : public OpConversionPattern<asl::TupleOp> {
     if (elements.size() != tupleType.getTypes().size())
       return failure();
 
-    // Create a variable to hold the tuple
-    auto varOp = rewriter.create<emitc::VariableOp>(op.getLoc(), convertedType,
-                                                    emitc::OpaqueAttr());
+    // Create a variable to hold the tuple (emitc.variable requires LValueType)
+    auto lvalueType = emitc::LValueType::get(convertedType);
+    auto varOp = rewriter.create<emitc::VariableOp>(
+        op.getLoc(), lvalueType,
+        emitc::OpaqueAttr::get(rewriter.getContext(), ""));
 
     // For each element, initialize the corresponding field
     // For GMP types we need proper initialization, for other types direct
@@ -1900,47 +1902,224 @@ struct TupleOpLowering : public OpConversionPattern<asl::TupleOp> {
       Type elementType = typeAttr.getValue();
       Type convertedElementType = getTypeConverter()->convertType(elementType);
 
-      // Build field access expression: "&(tuple.itemN)"
-      // We use emitc.apply to create the field member access
-      SmallVector<Attribute> argsAttr;
-      argsAttr.push_back(rewriter.getStringAttr(fieldName));
-
-      auto fieldAccessOp = rewriter.create<emitc::CallOpaqueOp>(
-          op.getLoc(), TypeRange{convertedElementType}, ".", varOp.getResult(),
-          nullptr, rewriter.getArrayAttr(argsAttr));
+      // Build field access using emitc.member: tuple.itemN
+      auto fieldLvalueType = emitc::LValueType::get(convertedElementType);
+      auto fieldAccessOp = rewriter.create<emitc::MemberOp>(
+          op.getLoc(), fieldLvalueType, fieldName, varOp.getResult());
 
       // For GMP types (mpz_t, mpq_t), we need to call init and set functions
+      // For GMP, we load to get pointer and pass that to GMP functions
       if (auto opaqueType =
               llvm::dyn_cast<emitc::OpaqueType>(convertedElementType)) {
         StringRef typeName = opaqueType.getValue();
 
         if (typeName == "mpz_t") {
-          // For mpz_t: mpz_init_set(tuple.itemN, value)
-          SmallVector<Value, 2> initSetArgs = {fieldAccessOp.getResult(0),
-                                               elements[i]};
+          // Load to get value for GMP function
+          auto loadedField = rewriter.create<emitc::LoadOp>(
+              op.getLoc(), convertedElementType, fieldAccessOp.getResult());
+          SmallVector<Value, 2> initSetArgs = {loadedField, elements[i]};
           rewriter.create<emitc::CallOpaqueOp>(op.getLoc(), TypeRange{},
                                                "mpz_init_set", initSetArgs,
                                                nullptr, nullptr);
         } else if (typeName == "mpq_t") {
-          // For mpq_t: mpq_init(tuple.itemN); mpq_set(tuple.itemN, value)
-          SmallVector<Value, 1> initArgs = {fieldAccessOp.getResult(0)};
+          auto loadedField = rewriter.create<emitc::LoadOp>(
+              op.getLoc(), convertedElementType, fieldAccessOp.getResult());
+          SmallVector<Value, 1> initArgs = {loadedField};
           rewriter.create<emitc::CallOpaqueOp>(
               op.getLoc(), TypeRange{}, "mpq_init", initArgs, nullptr, nullptr);
-          SmallVector<Value, 2> setArgs = {fieldAccessOp.getResult(0),
-                                           elements[i]};
+          SmallVector<Value, 2> setArgs = {loadedField, elements[i]};
           rewriter.create<emitc::CallOpaqueOp>(
               op.getLoc(), TypeRange{}, "mpq_set", setArgs, nullptr, nullptr);
         } else {
-          // For simple types (bool, int, const char*, etc.): direct assignment
-          SmallVector<Value, 2> assignArgs = {fieldAccessOp.getResult(0),
-                                              elements[i]};
-          rewriter.create<emitc::CallOpaqueOp>(op.getLoc(), TypeRange{}, "=",
-                                               assignArgs, nullptr, nullptr);
+          // For simple types: use emitc.assign
+          rewriter.create<emitc::AssignOp>(op.getLoc(), fieldAccessOp,
+                                           elements[i]);
         }
+      } else {
+        // For non-opaque simple types: use emitc.assign
+        rewriter.create<emitc::AssignOp>(op.getLoc(), fieldAccessOp,
+                                         elements[i]);
       }
     }
 
     rewriter.replaceOp(op, varOp.getResult());
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Phase 6: Data Structure Access Lowering Patterns
+//===----------------------------------------------------------------------===//
+
+// Tuple element access: tuple.itemN
+struct GetItemOpLowering : public OpConversionPattern<asl::GetItemOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::GetItemOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    // Get the index
+    int32_t index = op.getIndex();
+    std::string fieldName = "item" + std::to_string(index);
+
+    // Get converted result type
+    Type convertedResultType =
+        getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedResultType)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    // Build field access using emitc.member: tuple.itemN
+    // The result is an lvalue that will be loaded by materialization if needed
+    auto fieldLvalueType = emitc::LValueType::get(convertedResultType);
+    auto fieldAccessOp = rewriter.create<emitc::MemberOp>(
+        loc, fieldLvalueType, fieldName, adaptor.getTuple());
+
+    // Load the field value
+    auto loadedValue = rewriter.create<emitc::LoadOp>(
+        loc, convertedResultType, fieldAccessOp.getResult());
+
+    rewriter.replaceOp(op, loadedValue.getResult());
+    return success();
+  }
+};
+
+// Record construction: struct initialization
+struct RecordOpLowering : public OpConversionPattern<asl::RecordOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::RecordOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    // Get converted result type
+    Type convertedType =
+        getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedType)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    // Create a variable to hold the record (emitc.variable requires LValueType)
+    auto lvalueType = emitc::LValueType::get(convertedType);
+    auto varOp = rewriter.create<emitc::VariableOp>(
+        loc, lvalueType, emitc::OpaqueAttr::get(rewriter.getContext(), ""));
+
+    // Get field names and values
+    ArrayAttr fieldNames = op.getFieldNames();
+    auto fieldValues = adaptor.getFieldValues();
+
+    // For each field, initialize it
+    for (size_t i = 0; i < fieldValues.size(); ++i) {
+      StringRef fieldName =
+          mlir::cast<StringAttr>(fieldNames[i]).getValue();
+
+      // Get converted element type
+      Type convertedElementType = fieldValues[i].getType();
+
+      // Build field access using emitc.member: record.fieldName
+      auto fieldLvalueType = emitc::LValueType::get(convertedElementType);
+      auto fieldAccessOp = rewriter.create<emitc::MemberOp>(
+          loc, fieldLvalueType, fieldName, varOp.getResult());
+
+      // Handle GMP types vs simple types
+      if (auto opaqueType =
+              llvm::dyn_cast<emitc::OpaqueType>(convertedElementType)) {
+        StringRef typeName = opaqueType.getValue();
+
+        if (typeName == "mpz_t") {
+          auto loadedField = rewriter.create<emitc::LoadOp>(
+              loc, convertedElementType, fieldAccessOp.getResult());
+          SmallVector<Value, 2> initSetArgs = {loadedField, fieldValues[i]};
+          rewriter.create<emitc::CallOpaqueOp>(loc, TypeRange{}, "mpz_init_set",
+                                               initSetArgs, nullptr, nullptr);
+        } else if (typeName == "mpq_t") {
+          auto loadedField = rewriter.create<emitc::LoadOp>(
+              loc, convertedElementType, fieldAccessOp.getResult());
+          SmallVector<Value, 1> initArgs = {loadedField};
+          rewriter.create<emitc::CallOpaqueOp>(loc, TypeRange{}, "mpq_init",
+                                               initArgs, nullptr, nullptr);
+          SmallVector<Value, 2> setArgs = {loadedField, fieldValues[i]};
+          rewriter.create<emitc::CallOpaqueOp>(loc, TypeRange{}, "mpq_set",
+                                               setArgs, nullptr, nullptr);
+        } else {
+          rewriter.create<emitc::AssignOp>(loc, fieldAccessOp, fieldValues[i]);
+        }
+      } else {
+        // Simple types: use emitc.assign
+        rewriter.create<emitc::AssignOp>(loc, fieldAccessOp, fieldValues[i]);
+      }
+    }
+
+    rewriter.replaceOp(op, varOp.getResult());
+    return success();
+  }
+};
+
+// Record field access: record.fieldName
+struct GetFieldOpLowering : public OpConversionPattern<asl::GetFieldOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::GetFieldOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    StringRef fieldName = op.getFieldName();
+
+    // Get converted result type
+    Type convertedResultType =
+        getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedResultType)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    // Build field access using emitc.member: record.fieldName
+    auto fieldLvalueType = emitc::LValueType::get(convertedResultType);
+    auto fieldAccessOp = rewriter.create<emitc::MemberOp>(
+        loc, fieldLvalueType, fieldName, adaptor.getRecord());
+
+    // Load the field value
+    auto loadedValue = rewriter.create<emitc::LoadOp>(
+        loc, convertedResultType, fieldAccessOp.getResult());
+
+    rewriter.replaceOp(op, loadedValue.getResult());
+    return success();
+  }
+};
+
+// Array element access: array[index]
+struct GetArrayOpLowering : public OpConversionPattern<asl::GetArrayOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::GetArrayOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    // Get converted result type
+    Type convertedResultType =
+        getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedResultType)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    // For GMP index, we need to convert to native int first
+    Value index = adaptor.getIndex();
+    if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(index.getType())) {
+      auto mpzType = emitc::OpaqueType::get(rewriter.getContext(), "mpz_t");
+      index = rewriter.create<emitc::LoadOp>(loc, mpzType, index);
+    }
+
+    // Convert GMP integer index to native long
+    auto longType = emitc::OpaqueType::get(rewriter.getContext(), "long");
+    auto nativeIndex = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{longType}, "mpz_get_si", ValueRange{index}, nullptr,
+        nullptr);
+
+    // Build array access: array[index]
+    auto subscriptOp = rewriter.create<emitc::SubscriptOp>(
+        loc, convertedResultType, adaptor.getBase(), nativeIndex.getResult(0));
+
+    rewriter.replaceOp(op, subscriptOp.getResult());
     return success();
   }
 };
@@ -1989,6 +2168,10 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
                  LiteralLabelOpLowering, LiteralIntOpLowering,
                  LiteralBoolOpLowering, LiteralRealOpLowering,
                  TypeDeclOpLowering, TupleOpLowering>(typeConverter, context);
+
+    // Add data structure access patterns (Phase 6)
+    patterns.add<GetItemOpLowering, RecordOpLowering, GetFieldOpLowering,
+                 GetArrayOpLowering>(typeConverter, context);
 
     // Add integer binary operation patterns
     patterns.add<IntBinaryOpLowering<asl::BinopIntAddOp>>(typeConverter, context,
