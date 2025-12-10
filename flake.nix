@@ -85,13 +85,17 @@
                 herdtools7
                 typst
                 asl-mlir
+                asl-json-backend
+                asl-llvm
                 ocaml
                 cmake
                 ninja
                 gmp
+                lit
                 (python3.withPackages (
                   ps: with ps; [
                     gmpy2
+                    psutil
                   ]
                 ))
               ];

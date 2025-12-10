@@ -171,14 +171,45 @@ ninja
 
 ### Running Tests
 
-Within the nix develop environment (assumes build in `asl-mlir/build`):
+Tests use LLVM's `lit` test runner. Test files are `.asl` or `.mlir` files with `// RUN:` directives. Tests are in `asl-mlir/test/`.
+
+#### Initial Setup (required once after cmake configure)
+
+After running cmake, reconfigure with proper tool paths for lit:
 ```bash
-ninja -C asl-mlir/build check-asl-opt
+nix develop -c bash -c "cd asl-mlir/build && cmake .. -G Ninja \
+  -DMLIR_DIR=\$(dirname \$(which mlir-tblgen))/../lib/cmake/mlir \
+  -DLLVM_EXTERNAL_LIT=\$(which lit) \
+  -DAJB_TOOLS_DIR=\$(dirname \$(which asl-json-backend))"
 ```
+
+#### Running All Tests
+
+From the build directory:
+```bash
+nix develop -c bash -c "cd asl-mlir/build && lit test/ -sv"
+```
+
+Or run all tests with summary:
+```bash
+nix develop -c bash -c "cd asl-mlir/build && lit test/"
+```
+
+#### Running Specific Tests
 
 Run a specific test file:
 ```bash
-nix develop -c bash -c "cd asl-mlir/build && ./bin/llvm-lit ../test/Passes/BaseTypeLowering.asl -v"
+nix develop -c bash -c "cd asl-mlir/build && lit test/Passes/ASLToEmitC.mlir -v"
 ```
 
-Tests use LLVM's `lit` test runner. Test files are `.asl` or `.mlir` files with `// RUN:` directives. Tests are in `asl-mlir/test/`.
+Run tests in a specific directory:
+```bash
+nix develop -c bash -c "cd asl-mlir/build && lit test/Passes/ -sv"
+```
+
+#### Test Output Options
+
+- `-v` or `--verbose`: Show test commands being executed
+- `-s` or `--succinct`: Show less output (one line per test)
+- `-sv`: Combined succinct with verbose (common usage)
+- `--filter=REGEX`: Run only tests matching the pattern

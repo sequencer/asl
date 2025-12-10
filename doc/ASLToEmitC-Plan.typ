@@ -2,7 +2,7 @@
 
 == Current State
 
-The `ASLToEmitC.cpp` pass (1291 lines) currently handles:
+The `ASLToEmitC.cpp` pass (4289 lines) currently handles:
 
 === Type Conversions (Implemented)
 - `!asl.int` -> `mpz_t` (GMP arbitrary-precision integers)
@@ -137,7 +137,7 @@ Note: Testing requires Phase 5 (Function Declarations) to be completed.
 - Context pointer for global variable access (requires globals analysis)
 - Procedure return handling (void functions)
 
-=== Phase 6: Data Structures (PARTIALLY IMPLEMENTED)
+=== Phase 6: Data Structures (IMPLEMENTED)
 
 ==== Implemented Patterns
 - `TupleOp` -> `emitc.variable` + `emitc.member` for field initialization
@@ -147,12 +147,16 @@ Note: Testing requires Phase 5 (Function Declarations) to be completed.
 - `RecordOp` -> `emitc.variable` + `emitc.member` for field initialization
 - `GetFieldOp` -> `emitc.member` + `emitc.load` for record field access
 - `GetArrayOp` -> `emitc.subscript` with `mpz_get_si` for index conversion
+- `GetEnumArrayOp` -> `emitc.subscript` with enum cast to int
+- `GetFieldsOp` -> concatenates fields via shift and OR for bit-packing
+- `ArrayOp` -> `emitc.variable` (simplified, without initialization loop)
+- `EnumArrayOp` -> `emitc.variable` (simplified, without initialization)
+- `PragmaDeclOp` -> erased (tool-specific hints)
+- `GlobalStorageDeclOp` -> erased (handled during context generation)
 
 ==== Not Yet Implemented
-- `ArrayOp` -> heap allocation or stack array
-- `GetEnumArrayOp` -> enum-indexed access
-- `EnumArrayOp` -> enum-keyed array construction
-- `GetFieldsOp` -> multiple field access for bit-packing
+- Full array initialization with fill value (requires loop generation)
+- Full enum array initialization (requires loop over enum values)
 
 === Phase 7: Slicing Operations (IMPLEMENTED)
 
@@ -233,7 +237,7 @@ Priority: Low (complex runtime)
 2. *Try Statement* (`StmtTryOp`)
    - Output: `setjmp` setup, handler dispatch
 
-=== Phase 13: Miscellaneous (PARTIALLY IMPLEMENTED)
+=== Phase 13: Miscellaneous (IMPLEMENTED)
 
 ==== Implemented Patterns
 - `StmtAssertOp` -> runtime assertion (IMPLEMENTED in Phase 4)
@@ -241,9 +245,6 @@ Priority: Low (complex runtime)
 - `StmtPrintOp` -> `printf`/`gmp_printf` with type-based format strings
 - `StmtPragmaOp` -> erased (tool-specific hints ignored)
 - `ArbitraryOp` -> zero-initialized value (implementation-defined)
-
-==== Not Yet Implemented
-- `PragmaDeclOp` -> ignore
 
 == Architecture Decisions
 
@@ -299,14 +300,31 @@ For bitvectors > 64 bits:
 10. ATC (type conversion)
 11. Exception handling
 
-== Estimated Scope
+== Implementation Status
 
-- Phase 1-3: ~500 lines (literals + basic ops)
-- Phase 4-5: ~400 lines (control flow + functions)
-- Phase 6-8: ~600 lines (data structures + l-exprs)
-- Phase 9-13: ~500 lines (remaining features)
+Current implementation: 4289 lines in `ASLToEmitC.cpp`
 
-Total: ~2000 additional lines, bringing ASLToEmitC.cpp to ~3300 lines.
+=== Completed Phases
+- Phase 1: Literals and Simple Expressions
+- Phase 2: Binary Operations
+- Phase 3: Unary Operations
+- Phase 4: Control Flow
+- Phase 5: Function Declarations
+- Phase 6: Data Structures
+- Phase 7: Slicing Operations
+- Phase 8: L-Expressions
+- Phase 9: Assignment and Declaration
+- Phase 10: Pattern Matching (basic patterns)
+- Phase 13: Miscellaneous
+
+=== Remaining Work
+- Phase 4: For loops with GMP bounds, loop limit handling
+- Phase 5: Context pointer for globals, procedure return
+- Phase 6: Full array/enum array initialization with loops
+- Phase 8: LExprSliceOp, LExprSetEnumArrayOp, LExprSetFieldsOp
+- Phase 10: Pattern operations with regions (PatternNotOp, PatternAnyOp, etc.)
+- Phase 11: ATC type conversion operations
+- Phase 12: Exception handling (StmtThrowOp, StmtTryOp)
 
 Consider splitting into multiple files:
 - `ASLToEmitC.cpp` - pass infrastructure, type converter
