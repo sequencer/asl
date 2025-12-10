@@ -314,7 +314,7 @@ For bitvectors > 64 bits:
 
 == Implementation Status
 
-Current implementation: 4919 lines in `ASLToEmitC.cpp`
+Current implementation: 5055 lines in `ASLToEmitC.cpp`
 
 === Completed Phases
 - Phase 1: Literals and Simple Expressions
@@ -332,12 +332,16 @@ Current implementation: 4919 lines in `ASLToEmitC.cpp`
 - Phase 13: Miscellaneous
 
 === Remaining Work
-- Phase 4: Loop limit handling, VarOp resolution for loop index
+- Phase 4: Loop limit handling (LimitExceeded exception)
 - Phase 5: Context pointer for globals, procedure return
 - Phase 6: Full array/enum array initialization with loops
 - Phase 8: Full bit-packing support for LExprSetFieldsOp, LExprSetCollectionFieldsOp
 - Phase 12: Full setjmp/longjmp exception handling (runtime support)
-- VarOp/LExprVarOp: Name resolution pass to map names to SSA values
+
+=== Recently Completed
+- VarOp name resolution: VarOpLowering pattern generates `emitc.call_opaque`
+  with the variable name. JSONImporter now correctly creates separate VarOps
+  for each mutable variable reference instead of reusing initial values.
 
 Consider splitting into multiple files:
 - `ASLToEmitC.cpp` - pass infrastructure, type converter
