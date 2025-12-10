@@ -2761,6 +2761,342 @@ struct StmtAssignOpLowering : public OpConversionPattern<asl::StmtAssignOp> {
 };
 
 //===----------------------------------------------------------------------===//
+// Phase 10: Pattern Matching Operations
+//===----------------------------------------------------------------------===//
+
+// PatternAll: wildcard pattern that always matches
+struct PatternAllOpLowering : public OpConversionPattern<asl::PatternAllOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::PatternAllOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Wildcard pattern always returns true
+    auto boolType = emitc::OpaqueType::get(rewriter.getContext(), "bool");
+    auto trueConst = rewriter.create<emitc::ConstantOp>(
+        op.getLoc(), boolType,
+        emitc::OpaqueAttr::get(rewriter.getContext(), "true"));
+    rewriter.replaceOp(op, trueConst.getResult());
+    return success();
+  }
+};
+
+// PatternSingle: single value pattern using equality comparison
+struct PatternSingleOpLowering
+    : public OpConversionPattern<asl::PatternSingleOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::PatternSingleOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    Value expr = adaptor.getExpr();
+    Value value = adaptor.getValue();
+    auto boolType = emitc::OpaqueType::get(context, "bool");
+
+    // Load if lvalue
+    if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(expr.getType())) {
+      expr = rewriter.create<emitc::LoadOp>(loc, lvalueType.getValueType(),
+                                            expr);
+    }
+    if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(value.getType())) {
+      value = rewriter.create<emitc::LoadOp>(loc, lvalueType.getValueType(),
+                                              value);
+    }
+
+    // Handle GMP types with mpz_cmp / mpq_cmp
+    if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(expr.getType())) {
+      StringRef typeName = opaqueType.getValue();
+      if (typeName == "mpz_t") {
+        // mpz_cmp(expr, value) == 0
+        auto intType = emitc::OpaqueType::get(context, "int");
+        auto cmpResult = rewriter.create<emitc::CallOpaqueOp>(
+            loc, TypeRange{intType}, "mpz_cmp", ValueRange{expr, value},
+            nullptr, nullptr);
+        auto zero = rewriter.create<emitc::ConstantOp>(
+            loc, intType, emitc::OpaqueAttr::get(context, "0"));
+        auto eqResult = rewriter.create<emitc::CallOpaqueOp>(
+            loc, TypeRange{boolType}, "==",
+            ValueRange{cmpResult.getResult(0), zero}, nullptr, nullptr);
+        rewriter.replaceOp(op, eqResult.getResult(0));
+        return success();
+      } else if (typeName == "mpq_t") {
+        auto intType = emitc::OpaqueType::get(context, "int");
+        auto cmpResult = rewriter.create<emitc::CallOpaqueOp>(
+            loc, TypeRange{intType}, "mpq_cmp", ValueRange{expr, value},
+            nullptr, nullptr);
+        auto zero = rewriter.create<emitc::ConstantOp>(
+            loc, intType, emitc::OpaqueAttr::get(context, "0"));
+        auto eqResult = rewriter.create<emitc::CallOpaqueOp>(
+            loc, TypeRange{boolType}, "==",
+            ValueRange{cmpResult.getResult(0), zero}, nullptr, nullptr);
+        rewriter.replaceOp(op, eqResult.getResult(0));
+        return success();
+      }
+    }
+
+    // For other types, use direct equality comparison
+    auto eqResult = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{boolType}, "==", ValueRange{expr, value}, nullptr,
+        nullptr);
+    rewriter.replaceOp(op, eqResult.getResult(0));
+    return success();
+  }
+};
+
+// PatternRange: range pattern (lower <= expr <= upper)
+struct PatternRangeOpLowering : public OpConversionPattern<asl::PatternRangeOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::PatternRangeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    Value expr = adaptor.getExpr();
+    Value lower = adaptor.getLower();
+    Value upper = adaptor.getUpper();
+    auto boolType = emitc::OpaqueType::get(context, "bool");
+
+    // Load if lvalue
+    if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(expr.getType())) {
+      expr = rewriter.create<emitc::LoadOp>(loc, lvalueType.getValueType(),
+                                            expr);
+    }
+    if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(lower.getType())) {
+      lower = rewriter.create<emitc::LoadOp>(loc, lvalueType.getValueType(),
+                                              lower);
+    }
+    if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(upper.getType())) {
+      upper = rewriter.create<emitc::LoadOp>(loc, lvalueType.getValueType(),
+                                              upper);
+    }
+
+    // Handle GMP types
+    if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(expr.getType())) {
+      StringRef typeName = opaqueType.getValue();
+      if (typeName == "mpz_t") {
+        auto intType = emitc::OpaqueType::get(context, "int");
+        // lower <= expr: mpz_cmp(expr, lower) >= 0
+        auto cmpLower = rewriter.create<emitc::CallOpaqueOp>(
+            loc, TypeRange{intType}, "mpz_cmp", ValueRange{expr, lower},
+            nullptr, nullptr);
+        auto zero = rewriter.create<emitc::ConstantOp>(
+            loc, intType, emitc::OpaqueAttr::get(context, "0"));
+        auto geqLower = rewriter.create<emitc::CallOpaqueOp>(
+            loc, TypeRange{boolType}, ">=",
+            ValueRange{cmpLower.getResult(0), zero}, nullptr, nullptr);
+
+        // expr <= upper: mpz_cmp(expr, upper) <= 0
+        auto cmpUpper = rewriter.create<emitc::CallOpaqueOp>(
+            loc, TypeRange{intType}, "mpz_cmp", ValueRange{expr, upper},
+            nullptr, nullptr);
+        auto leqUpper = rewriter.create<emitc::CallOpaqueOp>(
+            loc, TypeRange{boolType}, "<=",
+            ValueRange{cmpUpper.getResult(0), zero}, nullptr, nullptr);
+
+        // lower <= expr && expr <= upper
+        auto result = rewriter.create<emitc::CallOpaqueOp>(
+            loc, TypeRange{boolType}, "&&",
+            ValueRange{geqLower.getResult(0), leqUpper.getResult(0)}, nullptr,
+            nullptr);
+        rewriter.replaceOp(op, result.getResult(0));
+        return success();
+      }
+    }
+
+    // For simple types: lower <= expr && expr <= upper
+    auto geqLower = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{boolType}, ">=", ValueRange{expr, lower}, nullptr,
+        nullptr);
+    auto leqUpper = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{boolType}, "<=", ValueRange{expr, upper}, nullptr,
+        nullptr);
+    auto result = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{boolType}, "&&",
+        ValueRange{geqLower.getResult(0), leqUpper.getResult(0)}, nullptr,
+        nullptr);
+    rewriter.replaceOp(op, result.getResult(0));
+    return success();
+  }
+};
+
+// PatternGeq: greater than or equal pattern
+struct PatternGeqOpLowering : public OpConversionPattern<asl::PatternGeqOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::PatternGeqOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    Value expr = adaptor.getExpr();
+    Value threshold = adaptor.getThreshold();
+    auto boolType = emitc::OpaqueType::get(context, "bool");
+
+    // Load if lvalue
+    if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(expr.getType())) {
+      expr = rewriter.create<emitc::LoadOp>(loc, lvalueType.getValueType(),
+                                            expr);
+    }
+    if (auto lvalueType =
+            llvm::dyn_cast<emitc::LValueType>(threshold.getType())) {
+      threshold = rewriter.create<emitc::LoadOp>(
+          loc, lvalueType.getValueType(), threshold);
+    }
+
+    // Handle GMP types
+    if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(expr.getType())) {
+      StringRef typeName = opaqueType.getValue();
+      if (typeName == "mpz_t") {
+        auto intType = emitc::OpaqueType::get(context, "int");
+        auto cmpResult = rewriter.create<emitc::CallOpaqueOp>(
+            loc, TypeRange{intType}, "mpz_cmp", ValueRange{expr, threshold},
+            nullptr, nullptr);
+        auto zero = rewriter.create<emitc::ConstantOp>(
+            loc, intType, emitc::OpaqueAttr::get(context, "0"));
+        auto result = rewriter.create<emitc::CallOpaqueOp>(
+            loc, TypeRange{boolType}, ">=",
+            ValueRange{cmpResult.getResult(0), zero}, nullptr, nullptr);
+        rewriter.replaceOp(op, result.getResult(0));
+        return success();
+      }
+    }
+
+    // For simple types: expr >= threshold
+    auto result = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{boolType}, ">=", ValueRange{expr, threshold}, nullptr,
+        nullptr);
+    rewriter.replaceOp(op, result.getResult(0));
+    return success();
+  }
+};
+
+// PatternLeq: less than or equal pattern
+struct PatternLeqOpLowering : public OpConversionPattern<asl::PatternLeqOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::PatternLeqOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    Value expr = adaptor.getExpr();
+    Value threshold = adaptor.getThreshold();
+    auto boolType = emitc::OpaqueType::get(context, "bool");
+
+    // Load if lvalue
+    if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(expr.getType())) {
+      expr = rewriter.create<emitc::LoadOp>(loc, lvalueType.getValueType(),
+                                            expr);
+    }
+    if (auto lvalueType =
+            llvm::dyn_cast<emitc::LValueType>(threshold.getType())) {
+      threshold = rewriter.create<emitc::LoadOp>(
+          loc, lvalueType.getValueType(), threshold);
+    }
+
+    // Handle GMP types
+    if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(expr.getType())) {
+      StringRef typeName = opaqueType.getValue();
+      if (typeName == "mpz_t") {
+        auto intType = emitc::OpaqueType::get(context, "int");
+        auto cmpResult = rewriter.create<emitc::CallOpaqueOp>(
+            loc, TypeRange{intType}, "mpz_cmp", ValueRange{expr, threshold},
+            nullptr, nullptr);
+        auto zero = rewriter.create<emitc::ConstantOp>(
+            loc, intType, emitc::OpaqueAttr::get(context, "0"));
+        auto result = rewriter.create<emitc::CallOpaqueOp>(
+            loc, TypeRange{boolType}, "<=",
+            ValueRange{cmpResult.getResult(0), zero}, nullptr, nullptr);
+        rewriter.replaceOp(op, result.getResult(0));
+        return success();
+      }
+    }
+
+    // For simple types: expr <= threshold
+    auto result = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{boolType}, "<=", ValueRange{expr, threshold}, nullptr,
+        nullptr);
+    rewriter.replaceOp(op, result.getResult(0));
+    return success();
+  }
+};
+
+// PatternMask: bitvector mask pattern
+// The mask is encoded as a string with '0' (must be 0), '1' (must be 1),
+// and 'x' (don't care). We generate a mask for the positions that matter
+// and a value for the expected bits.
+struct PatternMaskOpLowering : public OpConversionPattern<asl::PatternMaskOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::PatternMaskOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    Value expr = adaptor.getExpr();
+    auto maskAttr = op.getMask();
+    auto boolType = emitc::OpaqueType::get(context, "bool");
+
+    // Load if lvalue
+    if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(expr.getType())) {
+      expr = rewriter.create<emitc::LoadOp>(loc, lvalueType.getValueType(),
+                                            expr);
+    }
+
+    // BitVectorMaskAttr has a single 'value' parameter encoding the mask
+    // Format: string of '0', '1', 'x' characters
+    // '0' means bit must be 0, '1' means bit must be 1, 'x' means don't care
+    StringRef maskStr = maskAttr.getValue().getValue();
+
+    // Build mask and value strings for C binary literals
+    // mask: 1 where we care about the bit, 0 where don't care
+    // value: the expected value for bits we care about
+    std::string mask, value;
+    for (char c : maskStr) {
+      if (c == '0') {
+        mask += '1';
+        value += '0';
+      } else if (c == '1') {
+        mask += '1';
+        value += '1';
+      } else {
+        // 'x' or any other: don't care
+        mask += '0';
+        value += '0';
+      }
+    }
+
+    std::string maskLiteral = "0b" + mask;
+    std::string valueLiteral = "0b" + value;
+
+    Type exprType = expr.getType();
+    auto maskConst = rewriter.create<emitc::ConstantOp>(
+        loc, exprType, emitc::OpaqueAttr::get(context, maskLiteral));
+    auto valueConst = rewriter.create<emitc::ConstantOp>(
+        loc, exprType, emitc::OpaqueAttr::get(context, valueLiteral));
+
+    // Pattern matches if (expr & mask) == value
+    auto masked = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{exprType}, "&", ValueRange{expr, maskConst}, nullptr,
+        nullptr);
+    auto result = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{boolType}, "==",
+        ValueRange{masked.getResult(0), valueConst}, nullptr, nullptr);
+
+    rewriter.replaceOp(op, result.getResult(0));
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Pass Implementation
 //===----------------------------------------------------------------------===//
 
@@ -2890,6 +3226,12 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
                  LExprSetFieldOpLowering, LExprSetArrayOpLowering,
                  LExprDestructuringOpLowering, StmtDeclOpLowering,
                  StmtAssignOpLowering>(typeConverter, context);
+
+    // Add pattern matching patterns (Phase 10)
+    patterns.add<PatternAllOpLowering, PatternSingleOpLowering,
+                 PatternRangeOpLowering, PatternGeqOpLowering,
+                 PatternLeqOpLowering, PatternMaskOpLowering>(typeConverter,
+                                                              context);
 
     // Collect type declarations before conversion for typedef generation
     SmallVector<asl::TypeDeclOp> typeDecls;

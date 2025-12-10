@@ -197,18 +197,21 @@ Note: Testing requires Phase 5 (Function Declarations) to be completed.
   - GMP types: `mpz_set` or `mpq_set`
   - Simple types: pointer dereference assignment
 
-=== Phase 10: Pattern Matching
-Priority: Low (complex)
+=== Phase 10: Pattern Matching (PARTIALLY IMPLEMENTED)
 
-- `PatternAllOp` -> always true
-- `PatternSingleOp` -> equality check
-- `PatternRangeOp` -> range check
-- `PatternGeqOp`, `PatternLeqOp` -> bound check
-- `PatternMaskOp` -> bitvector mask check
-- `PatternNotOp` -> negation
-- `PatternAnyOp` -> disjunction
-- `PatternTupleOp` -> element-wise matching
-- `PatternOp` -> pattern application
+==== Implemented Patterns
+- `PatternAllOp` -> always returns `true`
+- `PatternSingleOp` -> equality comparison (mpz_cmp for GMP, == for simple)
+- `PatternRangeOp` -> range check: `lower <= expr && expr <= upper`
+- `PatternGeqOp` -> greater-or-equal check
+- `PatternLeqOp` -> less-or-equal check
+- `PatternMaskOp` -> bitvector mask: `(expr & mask) == value`
+
+==== Not Yet Implemented
+- `PatternNotOp` -> pattern negation (requires region handling)
+- `PatternAnyOp` -> disjunction (requires region handling)
+- `PatternTupleOp` -> element-wise matching (requires region handling)
+- `PatternOp` -> pattern application (requires region handling)
 
 === Phase 11: Type Conversions (ATC)
 Priority: Low (constraint checking)
