@@ -2281,29 +2281,18 @@ struct ArrayOpLowering : public OpConversionPattern<asl::ArrayOp> {
     if (!convertedResultType)
       return rewriter.notifyMatchFailure(op, "failed to convert result type");
 
-    Value value = adaptor.getValue();
-    Value length = adaptor.getLength();
-
-    // Convert GMP length to native long
-    if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(length.getType())) {
-      auto mpzType = emitc::OpaqueType::get(context, "mpz_t");
-      length = rewriter.create<emitc::LoadOp>(loc, mpzType, length);
-    }
-
-    auto longType = emitc::OpaqueType::get(context, "long");
-    auto nativeLength = rewriter.create<emitc::CallOpaqueOp>(
-        loc, TypeRange{longType}, "mpz_get_si", ValueRange{length}, nullptr,
-        nullptr);
+    // Note: value and length are available but not used in this simplified
+    // implementation. A full implementation would initialize array elements.
+    // Value value = adaptor.getValue();
+    // Value length = adaptor.getLength();
 
     // For array construction, we need to allocate and initialize
-    // This is a simplified version using VLA or malloc
-    // In practice, ASL arrays may need more complex handling
+    // This is a simplified version that creates an uninitialized array
+    // In practice, ASL arrays may need more complex handling with loops
     auto lvalueType = emitc::LValueType::get(convertedResultType);
     auto varOp = rewriter.create<emitc::VariableOp>(
         loc, lvalueType, emitc::OpaqueAttr::get(context, ""));
 
-    // Initialize array elements - would need a loop in generated C code
-    // For now, create an uninitialized array (simplified)
     rewriter.replaceOp(op, varOp.getResult());
     return success();
   }
@@ -2918,22 +2907,11 @@ struct LExprSetFieldsOpLowering
   LogicalResult
   matchAndRewrite(asl::LExprSetFieldsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
-    MLIRContext *context = rewriter.getContext();
-
-    Value base = adaptor.getBase();
-    auto fieldNames = op.getFieldNames();
-
     // Multiple field assignment for bit-packing is complex:
     // It needs to unpack the assigned value and distribute bits to fields
-    // For now, create a descriptor holding base and field info
-
-    // Create a struct to hold the l-expression info
-    auto voidPtrType = emitc::OpaqueType::get(context, "void*");
-
-    // For simplicity, just return the base - proper implementation
-    // would need runtime support for bit-packing
-    rewriter.replaceOp(op, base);
+    // A proper implementation would need runtime support for bit-packing
+    // For simplicity, just return the base
+    rewriter.replaceOp(op, adaptor.getBase());
     return success();
   }
 };
