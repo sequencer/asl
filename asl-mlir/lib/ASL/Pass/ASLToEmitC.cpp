@@ -3453,6 +3453,209 @@ struct PatternMaskOpLowering : public OpConversionPattern<asl::PatternMaskOp> {
   }
 };
 
+// PatternNotOp: negates the result of a nested pattern
+struct PatternNotOpLowering : public OpConversionPattern<asl::PatternNotOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::PatternNotOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+    auto boolType = emitc::OpaqueType::get(context, "bool");
+
+    // The pattern region should yield a boolean result
+    // We need to inline the region and negate its result
+    Region &patternRegion = op.getPattern();
+    if (patternRegion.empty())
+      return failure();
+
+    Block &patternBlock = patternRegion.front();
+
+    // Clone operations from the pattern block
+    IRMapping mapping;
+    for (Operation &nestedOp : patternBlock.without_terminator()) {
+      rewriter.clone(nestedOp, mapping);
+    }
+
+    // Get the result from the terminator (should be a yield-like op)
+    Operation *terminator = patternBlock.getTerminator();
+    Value patternResult;
+    if (terminator->getNumOperands() > 0) {
+      patternResult = mapping.lookupOrDefault(terminator->getOperand(0));
+    } else {
+      // No result, assume true
+      auto trueConst = rewriter.create<emitc::ConstantOp>(
+          loc, boolType, emitc::OpaqueAttr::get(context, "true"));
+      patternResult = trueConst.getResult();
+    }
+
+    // Negate the result
+    auto negatedResult = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{boolType}, "!", ValueRange{patternResult}, nullptr,
+        nullptr);
+
+    rewriter.replaceOp(op, negatedResult.getResult(0));
+    return success();
+  }
+};
+
+// PatternAnyOp: matches if any of the sub-patterns match (disjunction)
+struct PatternAnyOpLowering : public OpConversionPattern<asl::PatternAnyOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::PatternAnyOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+    auto boolType = emitc::OpaqueType::get(context, "bool");
+
+    Region &patternsRegion = op.getPatterns();
+    if (patternsRegion.empty())
+      return failure();
+
+    Block &patternsBlock = patternsRegion.front();
+
+    // Clone operations from the patterns block
+    IRMapping mapping;
+    SmallVector<Value> patternResults;
+
+    for (Operation &nestedOp : patternsBlock.without_terminator()) {
+      Operation *cloned = rewriter.clone(nestedOp, mapping);
+      // Collect boolean results from pattern operations
+      for (Value result : cloned->getResults()) {
+        if (result.getType() == boolType ||
+            result.getType().isInteger(1)) {
+          patternResults.push_back(result);
+        }
+      }
+    }
+
+    // If no pattern results, return false
+    if (patternResults.empty()) {
+      auto falseConst = rewriter.create<emitc::ConstantOp>(
+          loc, boolType, emitc::OpaqueAttr::get(context, "false"));
+      rewriter.replaceOp(op, falseConst.getResult());
+      return success();
+    }
+
+    // OR all pattern results together
+    Value result = patternResults[0];
+    for (size_t i = 1; i < patternResults.size(); ++i) {
+      result = rewriter.create<emitc::CallOpaqueOp>(
+          loc, TypeRange{boolType}, "||",
+          ValueRange{result, patternResults[i]}, nullptr, nullptr).getResult(0);
+    }
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+// PatternTupleOp: matches tuple elements against sub-patterns
+struct PatternTupleOpLowering : public OpConversionPattern<asl::PatternTupleOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::PatternTupleOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+    auto boolType = emitc::OpaqueType::get(context, "bool");
+
+    Region &patternsRegion = op.getPatterns();
+    if (patternsRegion.empty())
+      return failure();
+
+    Block &patternsBlock = patternsRegion.front();
+
+    // Clone operations from the patterns block
+    IRMapping mapping;
+    SmallVector<Value> patternResults;
+
+    for (Operation &nestedOp : patternsBlock.without_terminator()) {
+      Operation *cloned = rewriter.clone(nestedOp, mapping);
+      // Collect boolean results from pattern operations
+      for (Value result : cloned->getResults()) {
+        if (result.getType() == boolType ||
+            result.getType().isInteger(1)) {
+          patternResults.push_back(result);
+        }
+      }
+    }
+
+    // If no pattern results, return true (empty tuple matches)
+    if (patternResults.empty()) {
+      auto trueConst = rewriter.create<emitc::ConstantOp>(
+          loc, boolType, emitc::OpaqueAttr::get(context, "true"));
+      rewriter.replaceOp(op, trueConst.getResult());
+      return success();
+    }
+
+    // AND all pattern results together (all elements must match)
+    Value result = patternResults[0];
+    for (size_t i = 1; i < patternResults.size(); ++i) {
+      result = rewriter.create<emitc::CallOpaqueOp>(
+          loc, TypeRange{boolType}, "&&",
+          ValueRange{result, patternResults[i]}, nullptr, nullptr).getResult(0);
+    }
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+// PatternOp: pattern matching expression (evaluates nested pattern)
+struct PatternOpLowering : public OpConversionPattern<asl::PatternOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::PatternOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+    auto boolType = emitc::OpaqueType::get(context, "bool");
+
+    Region &patternRegion = op.getPattern();
+    if (patternRegion.empty())
+      return failure();
+
+    Block &patternBlock = patternRegion.front();
+
+    // Clone operations from the pattern block
+    IRMapping mapping;
+    Value lastBoolResult;
+
+    for (Operation &nestedOp : patternBlock.without_terminator()) {
+      Operation *cloned = rewriter.clone(nestedOp, mapping);
+      // Track the last boolean result as the pattern match result
+      for (Value result : cloned->getResults()) {
+        if (result.getType() == boolType ||
+            result.getType().isInteger(1)) {
+          lastBoolResult = result;
+        }
+      }
+    }
+
+    // Get result from terminator if available
+    Operation *terminator = patternBlock.getTerminator();
+    if (terminator->getNumOperands() > 0) {
+      lastBoolResult = mapping.lookupOrDefault(terminator->getOperand(0));
+    }
+
+    // If no boolean result found, return true
+    if (!lastBoolResult) {
+      auto trueConst = rewriter.create<emitc::ConstantOp>(
+          loc, boolType, emitc::OpaqueAttr::get(context, "true"));
+      lastBoolResult = trueConst.getResult();
+    }
+
+    rewriter.replaceOp(op, lastBoolResult);
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Phase 11: Type Conversions (ATC)
 // Note: AtcOpLowering is defined earlier in the file (line ~1808)
@@ -3965,8 +4168,10 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
     // Add pattern matching patterns (Phase 10)
     patterns.add<PatternAllOpLowering, PatternSingleOpLowering,
                  PatternRangeOpLowering, PatternGeqOpLowering,
-                 PatternLeqOpLowering, PatternMaskOpLowering>(typeConverter,
-                                                              context);
+                 PatternLeqOpLowering, PatternMaskOpLowering,
+                 PatternNotOpLowering, PatternAnyOpLowering,
+                 PatternTupleOpLowering, PatternOpLowering>(typeConverter,
+                                                            context);
 
     // Add type conversion patterns (Phase 11)
     // Note: AtcOpLowering is already registered above in the ATC section

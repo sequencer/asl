@@ -199,7 +199,7 @@ Note: Testing requires Phase 5 (Function Declarations) to be completed.
   - GMP types: `mpz_set` or `mpq_set`
   - Simple types: pointer dereference assignment
 
-=== Phase 10: Pattern Matching (PARTIALLY IMPLEMENTED)
+=== Phase 10: Pattern Matching (IMPLEMENTED)
 
 ==== Implemented Patterns
 - `PatternAllOp` -> always returns `true`
@@ -208,12 +208,10 @@ Note: Testing requires Phase 5 (Function Declarations) to be completed.
 - `PatternGeqOp` -> greater-or-equal check
 - `PatternLeqOp` -> less-or-equal check
 - `PatternMaskOp` -> bitvector mask: `(expr & mask) == value`
-
-==== Not Yet Implemented
-- `PatternNotOp` -> pattern negation (requires region handling)
-- `PatternAnyOp` -> disjunction (requires region handling)
-- `PatternTupleOp` -> element-wise matching (requires region handling)
-- `PatternOp` -> pattern application (requires region handling)
+- `PatternNotOp` -> negates nested pattern result
+- `PatternAnyOp` -> OR of all nested pattern results (disjunction)
+- `PatternTupleOp` -> AND of all nested pattern results (element-wise matching)
+- `PatternOp` -> evaluates nested pattern and returns result
 
 === Phase 11: Type Conversions (ATC) (IMPLEMENTED)
 
@@ -320,7 +318,7 @@ Current implementation: 4289 lines in `ASLToEmitC.cpp`
 - Phase 7: Slicing Operations
 - Phase 8: L-Expressions
 - Phase 9: Assignment and Declaration
-- Phase 10: Pattern Matching (basic patterns)
+- Phase 10: Pattern Matching
 - Phase 11: Type Conversions (ATC)
 - Phase 13: Miscellaneous
 
@@ -329,7 +327,6 @@ Current implementation: 4289 lines in `ASLToEmitC.cpp`
 - Phase 5: Context pointer for globals, procedure return
 - Phase 6: Full array/enum array initialization with loops
 - Phase 8: Full bit-packing support for LExprSetFieldsOp, LExprSetCollectionFieldsOp
-- Phase 10: Pattern operations with regions (PatternNotOp, PatternAnyOp, etc.)
 - Phase 12: Exception handling (StmtThrowOp, StmtTryOp)
 
 Consider splitting into multiple files:
