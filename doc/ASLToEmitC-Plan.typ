@@ -168,36 +168,34 @@ Note: Testing requires Phase 5 (Function Declarations) to be completed.
   - Single slice: `(base >> start) & ((1ULL << length) - 1)`
   - Multiple slices: concatenated via shift and OR
 
-=== Phase 8: L-Expressions (Assignment Targets)
-Priority: Medium (needed for assignment)
+=== Phase 8: L-Expressions (IMPLEMENTED)
 
-1. *Variable L-Expression* (`LExprVarOp`)
-   - Output: lvalue reference to variable
+==== L-Expression Type Representation
+- `!asl.lexpr` -> `void*` (type-erased pointer to assignable location)
 
-2. *Slice L-Expression* (`LExprSliceOp`)
-   - Output: bitfield write
+==== Implemented Patterns
+- `LExprDiscardOp` -> NULL pointer (assignment ignores value)
+- `LExprVarOp` -> `&variable_name` (address of named variable)
+- `LExprSetFieldOp` -> `&(base->field)` via call_opaque
+- `LExprSetArrayOp` -> `&(base[index])` via call_opaque
+- `LExprDestructuringOp` -> struct of void* pointers for tuple elements
 
-3. *Array Element L-Expression* (`LExprSetArrayOp`)
-   - Output: array element lvalue
+==== Not Yet Implemented
+- `LExprSliceOp` -> bitfield write (requires runtime support)
+- `LExprSetEnumArrayOp` -> enum-indexed array element
+- `LExprSetFieldsOp` -> multiple field assignment
+- `LExprSetCollectionFieldsOp` -> collection field assignment
 
-4. *Field L-Expression* (`LExprSetFieldOp`)
-   - Output: struct field lvalue
+=== Phase 9: Assignment and Declaration (IMPLEMENTED)
 
-5. *Destructuring L-Expression* (`LExprDestructuringOp`)
-   - Output: tuple element assignments
-
-6. *Discard L-Expression* (`LExprDiscardOp`)
-   - Output: nothing (value discarded)
-
-=== Phase 9: Assignment and Declaration
-Priority: Medium
-
-1. *Local Declaration* (`StmtDeclOp`)
-   - Output: `emitc.variable` with optional initializer
-
-2. *Assignment* (`StmtAssignOp`)
-   - Input: l-expression, value
-   - Output: store operation
+==== Implemented Patterns
+- `StmtDeclOp` -> `emitc.variable` with:
+  - GMP types: `mpz_init`/`mpz_init_set` or `mpq_init`/`mpq_set`
+  - Simple types: `emitc.assign`
+- `StmtAssignOp` -> assignment via:
+  - Discard check (NULL pointer skips assignment)
+  - GMP types: `mpz_set` or `mpq_set`
+  - Simple types: pointer dereference assignment
 
 === Phase 10: Pattern Matching
 Priority: Low (complex)

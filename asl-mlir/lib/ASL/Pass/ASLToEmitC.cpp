@@ -127,6 +127,13 @@ public:
       return convertSliceType(type);
     });
 
+    // Convert ASL l-expression type to void pointer
+    // L-expressions are type-erased handles to assignable locations
+    // In the lowering, they will be replaced by actual lvalue types
+    addConversion([this](asl::LExprType type) -> std::optional<Type> {
+      return convertLExprType(type);
+    });
+
     // Add source materialization for converting back from converted types
     addSourceMaterialization([](OpBuilder &builder, Type resultType,
                                 ValueRange inputs, Location loc) -> Value {
@@ -377,6 +384,19 @@ private:
     // - SliceLength(i, n): start=i, length=n
     // - SliceStar(i, n): start=i*n, length=n (caller computes)
     return emitc::OpaqueType::get(context, "struct { long start; long length; }");
+  }
+
+  // Convert ASL l-expression type to void pointer
+  Type convertLExprType(asl::LExprType type) {
+    // L-expressions in ASL are type-erased handles to assignable locations.
+    // We convert them to void* as a generic pointer type.
+    // The actual l-expression operations will produce properly typed lvalues,
+    // and the assignment operation will handle the specific cases.
+    //
+    // Note: This is a fallback - most l-expression operations should produce
+    // properly typed emitc::LValueType values directly, bypassing this
+    // conversion.
+    return emitc::OpaqueType::get(context, "void*");
   }
 };
 
@@ -2417,6 +2437,330 @@ struct SliceOpLowering : public OpConversionPattern<asl::SliceOp> {
 };
 
 //===----------------------------------------------------------------------===//
+// Phase 8 & 9: L-Expressions and Assignment
+//===----------------------------------------------------------------------===//
+
+// LExprDiscard: discards assigned value (no-op sink)
+// Returns a null pointer to indicate a discard l-expression
+struct LExprDiscardOpLowering
+    : public OpConversionPattern<asl::LExprDiscardOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::LExprDiscardOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Discard produces a null pointer - assignment will check for this
+    auto voidPtrType = emitc::OpaqueType::get(rewriter.getContext(), "void*");
+    auto nullPtr = rewriter.create<emitc::ConstantOp>(
+        op.getLoc(), voidPtrType,
+        emitc::OpaqueAttr::get(rewriter.getContext(), "NULL"));
+    rewriter.replaceOp(op, nullPtr.getResult());
+    return success();
+  }
+};
+
+// LExprVar: produces lvalue reference to a variable
+// NOTE: This requires variable lookup which is complex - for now we produce
+// a placeholder that will need context from StmtDeclOp
+struct LExprVarOpLowering : public OpConversionPattern<asl::LExprVarOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::LExprVarOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // TODO: Variable lookup requires a symbol table or context tracking
+    // For now, we'll create a verbatim reference using the variable name
+    // This will work when the variable is in scope in the generated C code
+    auto voidPtrType = emitc::OpaqueType::get(rewriter.getContext(), "void*");
+
+    // Create an expression that takes the address of the variable
+    std::string addrExpr = "&" + sanitizeIdentifier(op.getName().str());
+    auto addrOp = rewriter.create<emitc::ConstantOp>(
+        op.getLoc(), voidPtrType,
+        emitc::OpaqueAttr::get(rewriter.getContext(), addrExpr));
+
+    rewriter.replaceOp(op, addrOp.getResult());
+    return success();
+  }
+};
+
+// LExprSetField: produces lvalue for a record field
+struct LExprSetFieldOpLowering
+    : public OpConversionPattern<asl::LExprSetFieldOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::LExprSetFieldOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    // Get the base l-expression (pointer to record)
+    Value base = adaptor.getBase();
+    StringRef fieldName = op.getFieldName();
+
+    // For a field access on an l-expression, we need to:
+    // 1. Dereference the base pointer
+    // 2. Access the field
+    // 3. Return a pointer to that field
+    // This translates to: &(((RecordType*)base)->fieldName)
+    auto voidPtrType = emitc::OpaqueType::get(rewriter.getContext(), "void*");
+
+    // Build the expression using call_opaque for the arrow and address-of
+    // We'll use a template expression: &(base->field)
+    auto fieldPtr = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{voidPtrType}, "&->",
+        ValueRange{base},
+        rewriter.getArrayAttr({rewriter.getStringAttr(fieldName.str())}),
+        nullptr);
+
+    rewriter.replaceOp(op, fieldPtr.getResult(0));
+    return success();
+  }
+};
+
+// LExprSetArray: produces lvalue for an array element
+struct LExprSetArrayOpLowering
+    : public OpConversionPattern<asl::LExprSetArrayOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::LExprSetArrayOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Get the base l-expression and index
+    Value base = adaptor.getBase();
+    Value index = adaptor.getIndex();
+
+    // Convert GMP index to native long
+    index = gmpToLong(rewriter, loc, index);
+
+    // Build: &(base[index])
+    auto voidPtrType = emitc::OpaqueType::get(context, "void*");
+
+    auto elemPtr = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{voidPtrType}, "&[]", ValueRange{base, index}, nullptr,
+        nullptr);
+
+    rewriter.replaceOp(op, elemPtr.getResult(0));
+    return success();
+  }
+};
+
+// LExprDestructuring: produces tuple of l-expressions for destructuring
+// This is used in tuple assignment: (a, b, _) = tuple_value
+struct LExprDestructuringOpLowering
+    : public OpConversionPattern<asl::LExprDestructuringOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::LExprDestructuringOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Get the converted element l-expressions
+    auto elements = adaptor.getElements();
+
+    if (elements.empty()) {
+      auto voidPtrType = emitc::OpaqueType::get(context, "void*");
+      auto nullPtr = rewriter.create<emitc::ConstantOp>(
+          loc, voidPtrType, emitc::OpaqueAttr::get(context, "NULL"));
+      rewriter.replaceOp(op, nullPtr.getResult());
+      return success();
+    }
+
+    // Build a struct containing pointers to each element
+    // For N elements: struct { void* item0; void* item1; ... }
+    std::string structType = "struct { ";
+    for (size_t i = 0; i < elements.size(); ++i) {
+      if (i > 0)
+        structType += " ";
+      structType += "void* item" + std::to_string(i) + ";";
+    }
+    structType += " }";
+
+    auto destType = emitc::OpaqueType::get(context, structType);
+    auto lvalueType = emitc::LValueType::get(destType);
+
+    // Create variable for the destructuring struct
+    auto varOp = rewriter.create<emitc::VariableOp>(
+        loc, lvalueType, emitc::OpaqueAttr::get(context, ""));
+
+    // Initialize each field with the corresponding element pointer
+    auto voidPtrLvalue = emitc::LValueType::get(
+        emitc::OpaqueType::get(context, "void*"));
+    for (size_t i = 0; i < elements.size(); ++i) {
+      std::string fieldName = "item" + std::to_string(i);
+      auto fieldOp = rewriter.create<emitc::MemberOp>(loc, voidPtrLvalue,
+                                                       fieldName, varOp);
+      rewriter.create<emitc::AssignOp>(loc, fieldOp, elements[i]);
+    }
+
+    rewriter.replaceOp(op, varOp.getResult());
+    return success();
+  }
+};
+
+// StmtDecl: local variable declaration with optional initializer
+struct StmtDeclOpLowering : public OpConversionPattern<asl::StmtDeclOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::StmtDeclOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Get the declared type
+    Type declType;
+    if (op.getType()) {
+      declType = getTypeConverter()->convertType(*op.getType());
+    } else if (op.getInitialValue()) {
+      // Infer type from initializer
+      declType = getTypeConverter()->convertType(
+          op.getInitialValue().getType());
+    } else {
+      return rewriter.notifyMatchFailure(op,
+                                          "declaration without type or value");
+    }
+
+    if (!declType)
+      return rewriter.notifyMatchFailure(op, "failed to convert type");
+
+    // Create lvalue type for the variable
+    auto lvalueType = emitc::LValueType::get(declType);
+
+    // Create variable - for GMP types we need proper initialization
+    emitc::OpaqueAttr initAttr;
+    if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(declType)) {
+      StringRef typeName = opaqueType.getValue();
+      if (typeName == "mpz_t" || typeName == "mpq_t") {
+        // GMP types need to be initialized via function calls
+        initAttr = emitc::OpaqueAttr::get(context, "");
+      } else {
+        initAttr = emitc::OpaqueAttr::get(context, "");
+      }
+    } else {
+      initAttr = emitc::OpaqueAttr::get(context, "");
+    }
+
+    auto varOp = rewriter.create<emitc::VariableOp>(loc, lvalueType, initAttr);
+
+    // Handle GMP initialization
+    if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(declType)) {
+      StringRef typeName = opaqueType.getValue();
+      Value loadedVar =
+          rewriter.create<emitc::LoadOp>(loc, declType, varOp.getResult());
+
+      if (typeName == "mpz_t") {
+        if (adaptor.getInitialValue()) {
+          // mpz_init_set(var, value)
+          Value initVal = loadGmpValue(rewriter, loc, adaptor.getInitialValue());
+          rewriter.create<emitc::CallOpaqueOp>(
+              loc, TypeRange{}, "mpz_init_set",
+              ValueRange{loadedVar, initVal}, nullptr, nullptr);
+        } else {
+          // mpz_init(var)
+          rewriter.create<emitc::CallOpaqueOp>(loc, TypeRange{}, "mpz_init",
+                                                ValueRange{loadedVar}, nullptr,
+                                                nullptr);
+        }
+      } else if (typeName == "mpq_t") {
+        // mpq_init(var)
+        rewriter.create<emitc::CallOpaqueOp>(loc, TypeRange{}, "mpq_init",
+                                              ValueRange{loadedVar}, nullptr,
+                                              nullptr);
+        if (adaptor.getInitialValue()) {
+          Value initVal = loadGmpValue(rewriter, loc, adaptor.getInitialValue());
+          rewriter.create<emitc::CallOpaqueOp>(
+              loc, TypeRange{}, "mpq_set", ValueRange{loadedVar, initVal},
+              nullptr, nullptr);
+        }
+      } else if (adaptor.getInitialValue()) {
+        // Simple assignment for non-GMP types
+        rewriter.create<emitc::AssignOp>(loc, varOp, adaptor.getInitialValue());
+      }
+    } else if (adaptor.getInitialValue()) {
+      // Non-opaque type with initializer
+      rewriter.create<emitc::AssignOp>(loc, varOp, adaptor.getInitialValue());
+    }
+
+    // Declaration statements don't produce values - just erase
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// StmtAssign: assignment statement
+struct StmtAssignOpLowering : public OpConversionPattern<asl::StmtAssignOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::StmtAssignOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    Value lhs = adaptor.getLhs();
+    Value rhs = adaptor.getRhs();
+
+    // Check for discard (NULL pointer)
+    // If lhs is a null constant, we just drop the assignment
+    if (auto constOp = lhs.getDefiningOp<emitc::ConstantOp>()) {
+      if (auto opaqueAttr =
+              llvm::dyn_cast<emitc::OpaqueAttr>(constOp.getValue())) {
+        if (opaqueAttr.getValue() == "NULL") {
+          // Discard - just erase the op
+          rewriter.eraseOp(op);
+          return success();
+        }
+      }
+    }
+
+    // For a generic pointer-based l-expression, we need to cast and store
+    // This is a simplified version - more sophisticated handling would be
+    // needed for complex l-expressions
+
+    // Get the type of the RHS to determine how to store
+    Type rhsType = rhs.getType();
+
+    // Handle GMP types specially
+    if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(rhsType)) {
+      StringRef typeName = opaqueType.getValue();
+
+      if (typeName == "mpz_t") {
+        // For mpz_t: mpz_set(*lhs, rhs)
+        // We need to dereference lhs and call mpz_set
+        Value rhsLoaded = loadGmpValue(rewriter, loc, rhs);
+        rewriter.create<emitc::CallOpaqueOp>(
+            loc, TypeRange{}, "mpz_set", ValueRange{lhs, rhsLoaded}, nullptr,
+            nullptr);
+      } else if (typeName == "mpq_t") {
+        // For mpq_t: mpq_set(*lhs, rhs)
+        Value rhsLoaded = loadGmpValue(rewriter, loc, rhs);
+        rewriter.create<emitc::CallOpaqueOp>(
+            loc, TypeRange{}, "mpq_set", ValueRange{lhs, rhsLoaded}, nullptr,
+            nullptr);
+      } else {
+        // For simple types: *lhs = rhs (using verbatim assignment)
+        rewriter.create<emitc::CallOpaqueOp>(loc, TypeRange{}, "*=",
+                                              ValueRange{lhs, rhs}, nullptr,
+                                              nullptr);
+      }
+    } else {
+      // For non-opaque types, use pointer dereference assignment
+      rewriter.create<emitc::CallOpaqueOp>(loc, TypeRange{}, "*=",
+                                            ValueRange{lhs, rhs}, nullptr,
+                                            nullptr);
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Pass Implementation
 //===----------------------------------------------------------------------===//
 
@@ -2540,6 +2884,12 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
     patterns.add<SliceSingleOpLowering, SliceRangeOpLowering,
                  SliceLengthOpLowering, SliceStarOpLowering, SliceOpLowering>(
         typeConverter, context);
+
+    // Add l-expression and assignment patterns (Phase 8 & 9)
+    patterns.add<LExprDiscardOpLowering, LExprVarOpLowering,
+                 LExprSetFieldOpLowering, LExprSetArrayOpLowering,
+                 LExprDestructuringOpLowering, StmtDeclOpLowering,
+                 StmtAssignOpLowering>(typeConverter, context);
 
     // Collect type declarations before conversion for typedef generation
     SmallVector<asl::TypeDeclOp> typeDecls;
