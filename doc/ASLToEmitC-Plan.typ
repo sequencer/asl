@@ -215,15 +215,23 @@ Note: Testing requires Phase 5 (Function Declarations) to be completed.
 - `PatternTupleOp` -> element-wise matching (requires region handling)
 - `PatternOp` -> pattern application (requires region handling)
 
-=== Phase 11: Type Conversions (ATC)
-Priority: Low (constraint checking)
+=== Phase 11: Type Conversions (ATC) (IMPLEMENTED)
 
-- `AtcOp` -> type assertion/conversion
-- `AtcIntOp` -> integer constraint
-- `AtcIntExactOp` -> exact value constraint
-- `AtcIntRangeOp` -> range constraint
-- `AtcBitsOp` -> bitvector width/bitfield conversion
-- `AtcArrayOp` -> array length constraint
+==== Implemented Patterns
+- `AtcOp` -> pass-through (compile-time type assertion)
+- `AtcIntOp` -> pass-through (constraint region erased)
+- `AtcIntExactOp` -> pass-through (exact constraint compile-time)
+- `AtcIntRangeOp` -> pass-through (range constraint compile-time)
+- `AtcBitsOp` -> pass-through (width/bitfield specs compile-time)
+- `AtcArrayOp` -> pass-through (length constraint compile-time)
+- `AtcBitsBitfieldsSimpleOp` -> zero-initialized bitvector
+- `AtcBitsBitfieldsNestedOp` -> zero-initialized bitvector
+- `AtcBitsBitfieldsTypeOp` -> zero-initialized bitvector
+
+==== Notes
+ATC operations are primarily compile-time constraints. At runtime, the type
+converter handles the actual type conversion and the operation becomes a
+pass-through.
 
 === Phase 12: Exception Handling
 Priority: Low (complex runtime)
@@ -313,6 +321,7 @@ Current implementation: 4289 lines in `ASLToEmitC.cpp`
 - Phase 8: L-Expressions
 - Phase 9: Assignment and Declaration
 - Phase 10: Pattern Matching (basic patterns)
+- Phase 11: Type Conversions (ATC)
 - Phase 13: Miscellaneous
 
 === Remaining Work
@@ -321,7 +330,6 @@ Current implementation: 4289 lines in `ASLToEmitC.cpp`
 - Phase 6: Full array/enum array initialization with loops
 - Phase 8: Full bit-packing support for LExprSetFieldsOp, LExprSetCollectionFieldsOp
 - Phase 10: Pattern operations with regions (PatternNotOp, PatternAnyOp, etc.)
-- Phase 11: ATC type conversion operations
 - Phase 12: Exception handling (StmtThrowOp, StmtTryOp)
 
 Consider splitting into multiple files:

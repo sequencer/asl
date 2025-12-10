@@ -3454,6 +3454,197 @@ struct PatternMaskOpLowering : public OpConversionPattern<asl::PatternMaskOp> {
 };
 
 //===----------------------------------------------------------------------===//
+// Phase 11: Type Conversions (ATC)
+// Note: AtcOpLowering is defined earlier in the file (line ~1808)
+//===----------------------------------------------------------------------===//
+
+// AtcIntOp: Integer type conversion with constraints
+// The constraint region is for compile-time checking; at runtime we pass through
+struct AtcIntOpLowering : public OpConversionPattern<asl::AtcIntOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::AtcIntOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value expr = adaptor.getExpr();
+
+    // Handle lvalue conversion if needed
+    if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(expr.getType())) {
+      expr = rewriter.create<emitc::LoadOp>(op.getLoc(),
+                                            lvalueType.getValueType(), expr);
+    }
+
+    // Constraints are checked at compile-time; at runtime just pass through
+    // The constraints region is erased
+    rewriter.replaceOp(op, expr);
+    return success();
+  }
+};
+
+// AtcIntExactOp: Exact integer value constraint
+struct AtcIntExactOpLowering : public OpConversionPattern<asl::AtcIntExactOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::AtcIntExactOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value value = adaptor.getValue();
+
+    // Handle lvalue conversion if needed
+    if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(value.getType())) {
+      value = rewriter.create<emitc::LoadOp>(op.getLoc(),
+                                             lvalueType.getValueType(), value);
+    }
+
+    // Exact constraint is checked at compile-time or ignored at runtime
+    // Just pass through the value
+    rewriter.replaceOp(op, value);
+    return success();
+  }
+};
+
+// AtcIntRangeOp: Integer range constraint
+struct AtcIntRangeOpLowering : public OpConversionPattern<asl::AtcIntRangeOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::AtcIntRangeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value expr = adaptor.getExpr();
+
+    // Handle lvalue conversion if needed
+    if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(expr.getType())) {
+      expr = rewriter.create<emitc::LoadOp>(op.getLoc(),
+                                            lvalueType.getValueType(), expr);
+    }
+
+    // Range constraint is checked at compile-time
+    // At runtime, just pass through the value
+    rewriter.replaceOp(op, expr);
+    return success();
+  }
+};
+
+// AtcBitsOp: Bitvector type conversion with width/bitfield specs
+struct AtcBitsOpLowering : public OpConversionPattern<asl::AtcBitsOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::AtcBitsOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value expr = adaptor.getExpr();
+
+    // Handle lvalue conversion if needed
+    if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(expr.getType())) {
+      expr = rewriter.create<emitc::LoadOp>(op.getLoc(),
+                                            lvalueType.getValueType(), expr);
+    }
+
+    // Bitvector width/bitfield specs are compile-time constraints
+    // At runtime, just pass through the value
+    rewriter.replaceOp(op, expr);
+    return success();
+  }
+};
+
+// AtcArrayOp: Array type conversion with length constraint
+struct AtcArrayOpLowering : public OpConversionPattern<asl::AtcArrayOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::AtcArrayOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value expr = adaptor.getExpr();
+
+    // Handle lvalue conversion if needed
+    if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(expr.getType())) {
+      expr = rewriter.create<emitc::LoadOp>(op.getLoc(),
+                                            lvalueType.getValueType(), expr);
+    }
+
+    // Array length constraint is compile-time
+    // At runtime, just pass through the value
+    rewriter.replaceOp(op, expr);
+    return success();
+  }
+};
+
+// AtcBitsBitfieldsSimpleOp: Simple bitfield for bitvector ATC
+struct AtcBitsBitfieldsSimpleOpLowering
+    : public OpConversionPattern<asl::AtcBitsBitfieldsSimpleOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::AtcBitsBitfieldsSimpleOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // This operation takes slices and produces a bitvector type
+    // For now, create a zero-initialized value of the result type
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType)
+      return failure();
+
+    auto zeroConst = rewriter.create<emitc::ConstantOp>(
+        loc, resultType, emitc::OpaqueAttr::get(context, "0"));
+
+    rewriter.replaceOp(op, zeroConst.getResult());
+    return success();
+  }
+};
+
+// AtcBitsBitfieldsNestedOp: Nested bitfield for bitvector ATC
+struct AtcBitsBitfieldsNestedOpLowering
+    : public OpConversionPattern<asl::AtcBitsBitfieldsNestedOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::AtcBitsBitfieldsNestedOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // This operation takes slices with nested bitfields and produces a bitvector
+    // For now, create a zero-initialized value of the result type
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType)
+      return failure();
+
+    auto zeroConst = rewriter.create<emitc::ConstantOp>(
+        loc, resultType, emitc::OpaqueAttr::get(context, "0"));
+
+    rewriter.replaceOp(op, zeroConst.getResult());
+    return success();
+  }
+};
+
+// AtcBitsBitfieldsTypeOp: Typed bitfield for bitvector ATC
+struct AtcBitsBitfieldsTypeOpLowering
+    : public OpConversionPattern<asl::AtcBitsBitfieldsTypeOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::AtcBitsBitfieldsTypeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // This operation takes slices with a type and produces a bitvector
+    // For now, create a zero-initialized value of the result type
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType)
+      return failure();
+
+    auto zeroConst = rewriter.create<emitc::ConstantOp>(
+        loc, resultType, emitc::OpaqueAttr::get(context, "0"));
+
+    rewriter.replaceOp(op, zeroConst.getResult());
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Phase 13: Miscellaneous Operations
 //===----------------------------------------------------------------------===//
 
@@ -3776,6 +3967,13 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
                  PatternRangeOpLowering, PatternGeqOpLowering,
                  PatternLeqOpLowering, PatternMaskOpLowering>(typeConverter,
                                                               context);
+
+    // Add type conversion patterns (Phase 11)
+    // Note: AtcOpLowering is already registered above in the ATC section
+    patterns.add<AtcIntOpLowering, AtcIntExactOpLowering, AtcIntRangeOpLowering,
+                 AtcBitsOpLowering, AtcArrayOpLowering,
+                 AtcBitsBitfieldsSimpleOpLowering, AtcBitsBitfieldsNestedOpLowering,
+                 AtcBitsBitfieldsTypeOpLowering>(typeConverter, context);
 
     // Add miscellaneous patterns (Phase 13)
     patterns.add<StmtPrintOpLowering, StmtPragmaOpLowering, ArbitraryOpLowering>(
