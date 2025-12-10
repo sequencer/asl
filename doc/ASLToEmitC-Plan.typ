@@ -233,14 +233,16 @@ Priority: Low (complex runtime)
 2. *Try Statement* (`StmtTryOp`)
    - Output: `setjmp` setup, handler dispatch
 
-=== Phase 13: Miscellaneous
-Priority: Low
+=== Phase 13: Miscellaneous (PARTIALLY IMPLEMENTED)
 
+==== Implemented Patterns
 - `StmtAssertOp` -> runtime assertion (IMPLEMENTED in Phase 4)
-- `StmtPrintOp` -> `printf` calls
 - `StmtUnreachableOp` -> `__builtin_unreachable()` (IMPLEMENTED in Phase 4)
-- `StmtPragmaOp` -> pass-through or ignore
-- `ArbitraryOp` -> undefined value (0 or random)
+- `StmtPrintOp` -> `printf`/`gmp_printf` with type-based format strings
+- `StmtPragmaOp` -> erased (tool-specific hints ignored)
+- `ArbitraryOp` -> zero-initialized value (implementation-defined)
+
+==== Not Yet Implemented
 - `PragmaDeclOp` -> ignore
 
 == Architecture Decisions

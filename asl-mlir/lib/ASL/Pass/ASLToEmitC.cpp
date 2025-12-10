@@ -3097,6 +3097,186 @@ struct PatternMaskOpLowering : public OpConversionPattern<asl::PatternMaskOp> {
 };
 
 //===----------------------------------------------------------------------===//
+// Phase 13: Miscellaneous Operations
+//===----------------------------------------------------------------------===//
+
+// StmtPrint: print statement -> printf calls
+struct StmtPrintOpLowering : public OpConversionPattern<asl::StmtPrintOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::StmtPrintOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    auto args = adaptor.getArgs();
+
+    // Build format string and arguments based on types
+    std::string formatStr;
+    SmallVector<Value> printArgs;
+
+    for (Value arg : args) {
+      // Load if lvalue
+      if (auto lvalueType = llvm::dyn_cast<emitc::LValueType>(arg.getType())) {
+        arg = rewriter.create<emitc::LoadOp>(loc, lvalueType.getValueType(),
+                                              arg);
+      }
+
+      Type argType = arg.getType();
+
+      // Handle different types
+      if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(argType)) {
+        StringRef typeName = opaqueType.getValue();
+        if (typeName == "mpz_t") {
+          // For mpz_t, use gmp_printf with %Zd
+          formatStr += "%Zd";
+          printArgs.push_back(arg);
+        } else if (typeName == "mpq_t") {
+          // For mpq_t, use gmp_printf with %Qd
+          formatStr += "%Qd";
+          printArgs.push_back(arg);
+        } else if (typeName == "bool") {
+          // For bool, print "true" or "false"
+          formatStr += "%s";
+          // Create ternary: arg ? "true" : "false"
+          auto strType = emitc::OpaqueType::get(context, "const char*");
+          auto ternary = rewriter.create<emitc::CallOpaqueOp>(
+              loc, TypeRange{strType}, "?:",
+              ValueRange{arg}, nullptr, nullptr);
+          printArgs.push_back(ternary.getResult(0));
+        } else {
+          // For other opaque types, try to print as string
+          formatStr += "%s";
+          printArgs.push_back(arg);
+        }
+      } else if (argType.isInteger(1)) {
+        // i1 boolean
+        formatStr += "%d";
+        printArgs.push_back(arg);
+      } else if (argType.isInteger(32)) {
+        formatStr += "%d";
+        printArgs.push_back(arg);
+      } else if (argType.isInteger(64)) {
+        formatStr += "%ld";
+        printArgs.push_back(arg);
+      } else {
+        // Default: try %s
+        formatStr += "%s";
+        printArgs.push_back(arg);
+      }
+    }
+
+    // Add newline if requested
+    if (op.getNewline())
+      formatStr += "\\n";
+
+    // Create format string constant
+    auto strType = emitc::OpaqueType::get(context, "const char*");
+    auto formatConst = rewriter.create<emitc::ConstantOp>(
+        loc, strType,
+        emitc::OpaqueAttr::get(context, "\"" + formatStr + "\""));
+
+    // Build argument list with format string first
+    SmallVector<Value> allArgs;
+    allArgs.push_back(formatConst);
+    allArgs.append(printArgs.begin(), printArgs.end());
+
+    // Use gmp_printf if we have any GMP types, otherwise printf
+    bool hasGmp = false;
+    for (Value arg : args) {
+      if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(arg.getType())) {
+        StringRef typeName = opaqueType.getValue();
+        if (typeName == "mpz_t" || typeName == "mpq_t") {
+          hasGmp = true;
+          break;
+        }
+      }
+    }
+
+    StringRef printFunc = hasGmp ? "gmp_printf" : "printf";
+    rewriter.create<emitc::CallOpaqueOp>(loc, TypeRange{}, printFunc, allArgs,
+                                          nullptr, nullptr);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// StmtPragma: pragma statement -> ignore or pass-through
+struct StmtPragmaOpLowering : public OpConversionPattern<asl::StmtPragmaOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::StmtPragmaOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Pragmas are tool-specific hints, we just erase them
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// Arbitrary: non-deterministic value -> undefined (zero-initialize)
+struct ArbitraryOpLowering : public OpConversionPattern<asl::ArbitraryOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::ArbitraryOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Get the target type
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    // For arbitrary values, we return a zero/default value
+    // This is implementation-defined behavior
+    if (auto opaqueType = llvm::dyn_cast<emitc::OpaqueType>(resultType)) {
+      StringRef typeName = opaqueType.getValue();
+
+      if (typeName == "mpz_t") {
+        // Create a zero-initialized mpz_t
+        auto lvalueType = emitc::LValueType::get(resultType);
+        auto varOp = rewriter.create<emitc::VariableOp>(
+            loc, lvalueType, emitc::OpaqueAttr::get(context, ""));
+        auto loadedVar =
+            rewriter.create<emitc::LoadOp>(loc, resultType, varOp);
+        rewriter.create<emitc::CallOpaqueOp>(loc, TypeRange{}, "mpz_init",
+                                              ValueRange{loadedVar}, nullptr,
+                                              nullptr);
+        rewriter.replaceOp(op, varOp.getResult());
+        return success();
+      } else if (typeName == "mpq_t") {
+        // Create a zero-initialized mpq_t
+        auto lvalueType = emitc::LValueType::get(resultType);
+        auto varOp = rewriter.create<emitc::VariableOp>(
+            loc, lvalueType, emitc::OpaqueAttr::get(context, ""));
+        auto loadedVar =
+            rewriter.create<emitc::LoadOp>(loc, resultType, varOp);
+        rewriter.create<emitc::CallOpaqueOp>(loc, TypeRange{}, "mpq_init",
+                                              ValueRange{loadedVar}, nullptr,
+                                              nullptr);
+        rewriter.replaceOp(op, varOp.getResult());
+        return success();
+      } else if (typeName == "bool") {
+        auto falseConst = rewriter.create<emitc::ConstantOp>(
+            loc, resultType, emitc::OpaqueAttr::get(context, "false"));
+        rewriter.replaceOp(op, falseConst.getResult());
+        return success();
+      }
+    }
+
+    // For simple types, return 0
+    auto zeroConst = rewriter.create<emitc::ConstantOp>(
+        loc, resultType, emitc::OpaqueAttr::get(context, "0"));
+    rewriter.replaceOp(op, zeroConst.getResult());
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Pass Implementation
 //===----------------------------------------------------------------------===//
 
@@ -3232,6 +3412,10 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
                  PatternRangeOpLowering, PatternGeqOpLowering,
                  PatternLeqOpLowering, PatternMaskOpLowering>(typeConverter,
                                                               context);
+
+    // Add miscellaneous patterns (Phase 13)
+    patterns.add<StmtPrintOpLowering, StmtPragmaOpLowering, ArbitraryOpLowering>(
+        typeConverter, context);
 
     // Collect type declarations before conversion for typedef generation
     SmallVector<asl::TypeDeclOp> typeDecls;
