@@ -1267,11 +1267,18 @@ struct JSONImporter {
       auto name = obj->getString("name");
       if (!name)
         return makeError("var expr missing name");
+      // Check if this name is bound (e.g., function parameters or let bindings).
+      // Bound names can be used directly as SSA values.
+      // Unbound names (mutable variables) need a VarOp to read the current value.
       if (Value existing = lookup(*name))
         return existing;
+      // Create a VarOp for unbound variable references (mutable variables).
+      // Each reference creates its own VarOp because the variable's value
+      // may change between references.
       auto op = builder.create<asl::VarOp>(loc, getDefaultIntType(),
                                            builder.getStringAttr(*name));
-      bind(*name, op.getResult());
+      // Do NOT bind mutable variable references - each E_Var should create
+      // its own VarOp to read the current value at that point in the program.
       return op.getResult();
     } else if (k == "E_Binop") {
       auto opName = obj->getString("op");
@@ -2189,25 +2196,31 @@ struct JSONImporter {
       }
       auto decl = builder.create<asl::StmtDeclOp>(loc, initVal, ldkAttr,
                                                   *ldiAttr, typeAttr);
-      // Bind names
-      auto itemKindAttr = (*ldiAttr).getKind();
-      if (itemKindAttr) {
-        switch (itemKindAttr.getValue()) {
-        case asl::LDIKind::var: {
-          if (auto varName = (*ldiAttr).getVar())
-            bind(varName.getValue(), initVal);
-          break;
-        }
-        case asl::LDIKind::tuple: {
-          if (auto tupleArr = (*ldiAttr).getTuple()) {
-            for (auto attr : tupleArr)
-              if (auto sa = dyn_cast<StringAttr>(attr))
-                bind(sa.getValue(), Value());
+      // Bind names only for immutable declarations (let/constant).
+      // Mutable variables (var) should NOT be bound to their initial values
+      // because subsequent E_Var references need to generate actual VarOp
+      // operations to read the current value.
+      bool isMutable = (ldkAttr.getValue() == asl::LDK::var);
+      if (!isMutable) {
+        auto itemKindAttr = (*ldiAttr).getKind();
+        if (itemKindAttr) {
+          switch (itemKindAttr.getValue()) {
+          case asl::LDIKind::var: {
+            if (auto varName = (*ldiAttr).getVar())
+              bind(varName.getValue(), initVal);
+            break;
           }
-          break;
-        }
-        default:
-          break;
+          case asl::LDIKind::tuple: {
+            if (auto tupleArr = (*ldiAttr).getTuple()) {
+              for (auto attr : tupleArr)
+                if (auto sa = dyn_cast<StringAttr>(attr))
+                  bind(sa.getValue(), Value());
+            }
+            break;
+          }
+          default:
+            break;
+          }
         }
       }
       (void)decl;

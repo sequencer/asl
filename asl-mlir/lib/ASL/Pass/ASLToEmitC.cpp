@@ -1935,19 +1935,36 @@ struct AtcOpLowering : public OpConversionPattern<asl::AtcOp> {
   }
 };
 
-// VarOp: variable reference - convert to use the value directly
+// VarOp: variable reference - convert to a named variable access
+// Since ASL uses named variable references and EmitC uses SSA, we generate
+// a call_opaque that will produce the variable name in the output C code.
+// This works because EmitC's translation to C emits call_opaque callee names
+// directly, so "varname" becomes just "varname" in the output.
 struct VarOpLowering : public OpConversionPattern<asl::VarOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(asl::VarOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // For local variables (within functions), the variable reference
-    // should have been replaced by the actual SSA value during function
-    // body conversion. For now, just fail - this pattern should not
-    // be reached for properly converted code.
-    return rewriter.notifyMatchFailure(
-        op, "VarOp should be resolved during function body conversion");
+    Location loc = op.getLoc();
+
+    // Get the variable name and sanitize it
+    std::string varName = sanitizeIdentifier(op.getName());
+
+    // Convert the result type
+    Type convertedType =
+        getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedType)
+      return rewriter.notifyMatchFailure(op, "failed to convert type");
+
+    // For GMP types, we need to generate a reference to the variable
+    // Using emitc.call_opaque with the variable name will emit just the name
+    // in the C output, which is a valid reference to the variable
+    auto varRef = rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{convertedType}, varName, ValueRange{}, nullptr, nullptr);
+
+    rewriter.replaceOp(op, varRef.getResult(0));
+    return success();
   }
 };
 
@@ -4330,6 +4347,9 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
 
     // Add type conversion patterns (ATC)
     patterns.add<AtcOpLowering>(typeConverter, context);
+
+    // Add variable reference pattern
+    patterns.add<VarOpLowering>(typeConverter, context);
 
     // Add slicing patterns (Phase 7)
     patterns.add<SliceSingleOpLowering, SliceRangeOpLowering,
