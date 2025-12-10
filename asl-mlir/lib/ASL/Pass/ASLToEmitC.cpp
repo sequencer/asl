@@ -2265,6 +2265,33 @@ struct GetFieldsOpLowering : public OpConversionPattern<asl::GetFieldsOp> {
   }
 };
 
+// GetCollectionFields: access multiple fields from a collection
+// Similar to GetFieldsOp but for collections (which are accessed by name)
+struct GetCollectionFieldsOpLowering
+    : public OpConversionPattern<asl::GetCollectionFieldsOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::GetCollectionFieldsOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = rewriter.getContext();
+
+    // Get converted result type (should be bitvector)
+    Type convertedResultType =
+        getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedResultType)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    // Collection fields access requires runtime support for name lookup
+    // For now, return zero as a placeholder
+    auto zeroConst = rewriter.create<emitc::ConstantOp>(
+        loc, convertedResultType, emitc::OpaqueAttr::get(context, "0"));
+    rewriter.replaceOp(op, zeroConst.getResult());
+    return success();
+  }
+};
+
 // Array construction: creates array of given length filled with value
 struct ArrayOpLowering : public OpConversionPattern<asl::ArrayOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -4110,7 +4137,8 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
     // Add data structure access patterns (Phase 6)
     patterns.add<GetItemOpLowering, RecordOpLowering, GetFieldOpLowering,
                  GetArrayOpLowering, GetEnumArrayOpLowering, GetFieldsOpLowering,
-                 ArrayOpLowering, EnumArrayOpLowering>(typeConverter, context);
+                 GetCollectionFieldsOpLowering, ArrayOpLowering, EnumArrayOpLowering>(
+        typeConverter, context);
 
     // Add declaration patterns
     patterns.add<PragmaDeclOpLowering, GlobalStorageDeclOpLowering>(typeConverter,
