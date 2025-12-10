@@ -231,15 +231,18 @@ ATC operations are primarily compile-time constraints. At runtime, the type
 converter handles the actual type conversion and the operation becomes a
 pass-through.
 
-=== Phase 12: Exception Handling
-Priority: Low (complex runtime)
+=== Phase 12: Exception Handling (IMPLEMENTED - SIMPLIFIED)
 
-1. *Throw Statement* (`StmtThrowOp`)
-   - Strategy: `setjmp`/`longjmp` based
-   - Output: `longjmp` call
+==== Implemented Patterns
+- `StmtThrowOp` -> `abort()` call (terminates program)
+- `StmtTryOp` -> inlines protected block, ignores handlers
 
-2. *Try Statement* (`StmtTryOp`)
-   - Output: `setjmp` setup, handler dispatch
+==== Notes
+This is a simplified implementation that does not provide true exception handling.
+A proper implementation would require:
+- Runtime support for setjmp/longjmp
+- Exception type discrimination
+- Handler dispatch logic
 
 === Phase 13: Miscellaneous (IMPLEMENTED)
 
@@ -320,6 +323,7 @@ Current implementation: 4289 lines in `ASLToEmitC.cpp`
 - Phase 9: Assignment and Declaration
 - Phase 10: Pattern Matching
 - Phase 11: Type Conversions (ATC)
+- Phase 12: Exception Handling (simplified)
 - Phase 13: Miscellaneous
 
 === Remaining Work
@@ -327,7 +331,7 @@ Current implementation: 4289 lines in `ASLToEmitC.cpp`
 - Phase 5: Context pointer for globals, procedure return
 - Phase 6: Full array/enum array initialization with loops
 - Phase 8: Full bit-packing support for LExprSetFieldsOp, LExprSetCollectionFieldsOp
-- Phase 12: Exception handling (StmtThrowOp, StmtTryOp)
+- Phase 12: Full setjmp/longjmp exception handling (runtime support)
 
 Consider splitting into multiple files:
 - `ASLToEmitC.cpp` - pass infrastructure, type converter

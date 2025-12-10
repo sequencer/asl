@@ -4028,6 +4028,63 @@ struct ArbitraryOpLowering : public OpConversionPattern<asl::ArbitraryOp> {
 };
 
 //===----------------------------------------------------------------------===//
+// Phase 12: Exception Handling
+//===----------------------------------------------------------------------===//
+
+// StmtThrowOp: throws an exception
+// For now, we use abort() since proper exception handling requires runtime support
+struct StmtThrowOpLowering : public OpConversionPattern<asl::StmtThrowOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::StmtThrowOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // For now, we call abort() to terminate the program
+    // A proper implementation would use setjmp/longjmp or C++ exceptions
+    rewriter.create<emitc::CallOpaqueOp>(op.getLoc(), TypeRange{}, "abort",
+                                         ValueRange{}, nullptr, nullptr);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// StmtTryOp: try-catch block
+// For now, we just execute the protected block and ignore handlers
+// A proper implementation would use setjmp/longjmp
+struct StmtTryOpLowering : public OpConversionPattern<asl::StmtTryOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(asl::StmtTryOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Get the protected region
+    Region &protectedRegion = op.getProtected();
+    if (protectedRegion.empty())
+      return failure();
+
+    Block &protectedBlock = protectedRegion.front();
+
+    // Clone operations from the protected block into the current location
+    // This is a simplified implementation that ignores exception handling
+    IRMapping mapping;
+    for (Operation &nestedOp : protectedBlock.without_terminator()) {
+      rewriter.clone(nestedOp, mapping);
+    }
+
+    // Note: The handlers region is ignored in this simplified implementation
+    // A proper implementation would:
+    // 1. Set up a setjmp point before the protected block
+    // 2. Execute the protected block
+    // 3. If an exception occurs (longjmp), dispatch to the appropriate handler
+    // 4. Execute the handler's body
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Pass Implementation
 //===----------------------------------------------------------------------===//
 
@@ -4179,6 +4236,9 @@ struct ASLToEmitCPass : public impl::ASLToEmitCBase<ASLToEmitCPass> {
                  AtcBitsOpLowering, AtcArrayOpLowering,
                  AtcBitsBitfieldsSimpleOpLowering, AtcBitsBitfieldsNestedOpLowering,
                  AtcBitsBitfieldsTypeOpLowering>(typeConverter, context);
+
+    // Add exception handling patterns (Phase 12)
+    patterns.add<StmtThrowOpLowering, StmtTryOpLowering>(typeConverter, context);
 
     // Add miscellaneous patterns (Phase 13)
     patterns.add<StmtPrintOpLowering, StmtPragmaOpLowering, ArbitraryOpLowering>(
